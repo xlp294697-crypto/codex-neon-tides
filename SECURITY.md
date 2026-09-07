@@ -1,65 +1,71 @@
-# Security policy
+# 安全与隐私运维说明
 
-## Read this before installing
+## 默认安全边界
 
-Neon Tides is an experimental runtime compatibility layer, not an official
-Codex extension. It starts the Microsoft Store Codex desktop app with a
-Chromium DevTools Protocol (CDP) endpoint bound to a randomized port on
-`127.0.0.1`.
+- 服务没有内置或默认管理员密码；管理员密码要求 16–250 位、至少三类字符，并拒绝常见弱口令、品牌词和手机号；未配置有效密码哈希和 32 位以上随机会话密钥时拒绝启动。
+- 管理会话使用带签名、限时、HttpOnly、SameSite=Strict 的 Cookie；生产配置要求 HTTPS Secure Cookie。
+- 后台状态修改、退出和永久删除需要会话绑定的 CSRF 令牌。
+- 登录、统计事件和预约均有限流；请求体默认不超过 64 KiB。
+- 静态文件使用明确白名单，媒体请求会拒绝目录穿越和符号链接。
+- 数据写入使用同目录临时文件和原子替换；同一实例内写入串行化。
+- 页面带 CSP、禁止嵌入、MIME 嗅探防护、最小权限策略等安全响应头。
+- 前台统计默认不启动，只有访客明确同意后才创建随机访客标识。
 
-CDP has no authentication. While themed Codex is running, another process on
-the same computer may be able to connect to that endpoint, inspect rendered UI
-content, or execute JavaScript in the renderer. Randomizing the port prevents
-ordinary collisions; it is not an access-control mechanism.
+## 必须由部署者完成
 
-Use this project only on a trusted, single-user computer. Do not use it on a
-shared workstation, kiosk, untrusted remote host, or a machine that runs
-untrusted local software. Never change the debug address to `0.0.0.0`, expose
-the port through a firewall/router, or tunnel it to another machine.
+1. 只通过 HTTPS 对外服务；应用端口只允许反向代理访问。
+2. 严格保护 `.env`、数据和备份；不要上传到 Git、网盘公开链接或工单截图。
+3. 限制后台人员数量，离职或权限变化时重新运行初始化工具并替换 `.env`。
+4. 为操作系统、Docker/Node.js、反向代理启用安全更新和磁盘容量告警。
+5. 对备份加密、异地保存并演练恢复；仅有备份文件不等于可恢复。
+6. 如启用 WAF、CDN、代理访问日志或外部监测，确认其 IP、Cookie 和跨境处理行为与隐私告知一致。
 
-The launcher refuses to inject unless all of the following hold:
+## 运行账户与文件权限
 
-- the installed package is the Store-signed `OpenAI.Codex` package;
-- the main executable has a valid Authenticode signature;
-- the debug listener exists only on loopback;
-- the listener owner belongs to the validated Codex package;
-- the returned HTTP and WebSocket endpoints point to the expected loopback
-  port;
-- Node.js is version 22 or newer, identifies itself as Node.js, and carries a
-  valid OpenJS Foundation signature;
-- the DOM fingerprint matches the expected primary Codex window.
+- Windows 开机任务使用指定或当前普通账户的 S4U、Limited 令牌，不再以 SYSTEM 运行；安装工具会固定 Node.js 绝对路径，并收紧 `.env`、`data`、`backups` 的 ACL。不要把任务账户改回 SYSTEM，也不要把程序放到网络共享。
+- Linux 程序代码应由 root 持有且对 `jiuyue` 服务账户只读；只有 `data` 与 `backups` 可写。应用 systemd unit 只放行 `data`，备份 unit 才能写 `backups`。
+- Docker 应用以非 root 的 `node` 用户运行，根文件系统只读，数据只写入命名卷；Linux/Docker 运行时还会把数据文件权限收紧为 `0600`。恢复时必须使用随包脚本修正恢复文件所有权。
 
-## Process restart behavior
+## 代理信任
 
-Applying or removing the theme restarts the Codex package. Close all Codex
-windows and wait for active local tasks to finish before installation,
-reconfiguration, or uninstallation. The recovery watchdog may force-close
-package processes after a graceful-close timeout to avoid leaving a failed
-debug instance running.
+默认生产配置 `TRUST_PROXY=true`，前提是应用只接受可信反向代理的内部连接，而且代理会覆盖访客提供的 `X-Forwarded-For`。如果应用被直接暴露公网，攻击者可以伪造该请求头并绕开按 IP 的限流，因此禁止直接开放 3002。
 
-## Local data
+随包 Nginx 示例使用 `$remote_addr` 覆盖该头。Docker 全套模式中，应用只在内部网络暴露，Caddy 是唯一入口。同机 app-only 代理保持 `APP_BIND_IP=127.0.0.1`；另一台硬件代理只能绑定服务器私网 IP，并由主机防火墙把 3002 的来源限制为该代理。
 
-The selected background is copied to
-`%LOCALAPPDATA%\NeonTidesForCodex\background.mp4`. It is not encrypted. The
-injector performs no non-loopback network request and transfers the file only
-to the local Codex renderer.
+## 数据文件
 
-Runtime JSON can contain local install paths, package versions, PIDs, and
-timestamps. Redact those fields, user names, task names, chat text, and all
-credentials before posting diagnostics publicly. Never attach your background
-video to an issue unless you intentionally want to publish it and have the
-right to do so.
+`data/site-data.json` 包含家长姓名、电话、孩子年级、课程需求和预约跟进状态，属于需要重点保护的业务与个人信息。建议：
 
-## Supported versions
+- 文件权限仅授予网站服务账户和明确授权的运维人员；
+- 后台删除仅用于达到处理目的、响应当事人请求或纠正误收集信息；
+- 导出、备份和故障排查时不要把真实记录复制到测试环境；
+- 不要在聊天、截图或公开问题单中展示真实电话和自由文本内容；
+- 标准初始化配置中的统计事件按 `EVENT_RETENTION_DAYS=180` 清理，并最多保留 `MAX_EVENT_RECORDS=25000` 条；询盘最多保留 `MAX_INQUIRY_RECORDS=10000` 条，超过上限时淘汰最旧记录。实际运营应结合必要期限进一步缩短，并在接近容量前迁移或归档。
+- 随包备份脚本默认删除 90 天以前、且名称符合本包格式的本地备份；部署者应按实际必要期限调整，并监控异地副本。恢复默认核对同名 SHA-256 文件。响应删除请求时应删除在线记录、登记受影响的备份期限，并在灾难恢复后重新执行删除清单。
 
-Security fixes are provided only for the latest repository revision. Because
-the project relies on undocumented desktop-app internals, a Codex update may
-break compatibility at any time.
+不要执行 `docker compose down -v`，也不要在没有已验证异地备份时清理 Docker 卷；这会删除询盘数据卷和 Caddy 证书卷。
 
-## Reporting a vulnerability
+## 日志
 
-Do not publish secrets, private chat content, exploit payloads, or personally
-identifying logs in a public issue. Open a minimal issue that says a private
-security report is needed, without including sensitive details, so a maintainer
-can arrange a private channel. For non-sensitive hardening suggestions, open a
-normal GitHub issue with sanitized reproduction steps.
+应用默认只记录启动、停止和内部错误，不把正常访问或 IP 写入应用日志。随包 Caddy 配置未启用访问日志，Nginx 示例关闭访问日志。如果业务需要启用安全访问日志：
+
+- 记录最少字段，限制读取权限；
+- 设置明确且尽可能短的保留期；
+- 不把请求体、Cookie、Authorization 或后台密码写入日志；
+- 更新隐私告知，使其与实际处理一致。
+
+## 凭据轮换
+
+怀疑后台密码或 `.env` 泄露时：
+
+1. 立即下线或限制后台访问；
+2. 重新运行初始化工具并使用新密码生成 `.env`；
+3. 重启应用，使旧会话签名全部失效；
+4. 检查询盘状态、删除记录、代理与系统日志；
+5. 评估是否涉及个人信息泄露，并按适用要求采取通知、报告和补救措施。
+
+不要把旧 `.env` 保留在普通备份或回收站中。初始化工具使用 `-Force` 或 `--force` 会覆盖配置，但不会自动删除你在其他位置复制的旧文件。
+
+## 安全问题报告
+
+发现漏洞时，先停止向公网暴露受影响功能，保留不含凭据和个人信息的复现证据，并由服务器负责人修复、测试和部署。不要在公开渠道粘贴 `.env`、完整数据文件、后台 Cookie 或真实家长记录。

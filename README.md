@@ -1,381 +1,357 @@
-# Neon Tides for Codex
+# 氿悦体育独立站生产部署程序
 
-[简体中文](README.zh-CN.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+这是可放到独立服务器或自有硬件运行的完整网站程序，不是只能在 Codex 里打开的临时本机页面。程序包含：
 
-> [!WARNING]
-> Neon Tides is an experimental, Windows-only, unofficial compatibility layer.
-> It keeps a loopback Chromium DevTools endpoint open while themed Codex is
-> running. Read the [security section](#security) before installing.
+- 奶白色与紫色响应式官网、课程介绍、企业资质、教练资质、赛事成果与 22 张已处理展示图；
+- 联系电话 `18061736378` 与在线预约表单；
+- 后台询盘列表、跟进状态、删除功能；
+- 经访客单独同意后启用的站内流量与内容互动统计；
+- 无默认密码的后台认证、登录限流、CSRF 防护、请求体限制和安全响应头；
+- Docker 自动 HTTPS、既有反向代理接入、Windows/Linux 原生运行、开机自启和备份脚本。
 
-Neon Tides gives the Microsoft Store Codex desktop app a teal-and-magenta glass
-interface over **your own muted, looping MP4 background**.
+交付包中的 `data/site-data.json` 是空数据，不包含制作电脑上的真实访问记录、询盘、日志、密码或会话密钥。原始证照资料也不会随包交付，网站只使用 `public/media/` 中的发布版图片。
 
-It does not patch or redistribute files from the signed Codex application
-package. A per-user manager detects ordinary Codex launches, relaunches the app
-with a loopback debugging endpoint, injects the theme at runtime, verifies video
-playback, and restores a stock launch when injection fails.
+## 先理解外网访问方式
 
-OpenAI's documented Appearance settings cover base themes, accent/background/
-foreground colors, contrast, and fonts. Neon Tides goes beyond those documented
-controls through runtime CDP injection; it is not an official theme or video-
-background API. See the
-[official Appearance documentation](https://learn.chatgpt.com/docs/reference/settings#appearance).
-
-## Highlights
-
-- Uses a local MP4 that you select during installation; no wallpaper is bundled.
-- Forces the background to autoplay, remain muted, and loop continuously.
-- Adds translucent teal, deep-blue, and magenta surfaces throughout the primary
-  Codex window.
-- Verifies CSS, the video layer, loop state, mute state, and active playback.
-- Checks renderer health every 15 seconds and reinjects after a page/target
-  recreation.
-- Uses a randomized high-numbered port bound to `127.0.0.1`.
-- Validates the Store package, signed executable, port owner, loopback endpoint,
-  and signed Node.js runtime before injection.
-- Includes startup persistence, status reporting, watchdog recovery, reversible
-  disable, and a manifest-guarded purge option.
-- Contains no OpenAI binaries, personal media, screenshots, credentials, or
-  machine-specific runtime results.
-
-## Requirements
-
-- Windows 11 x64.
-- The Microsoft Store desktop package named `OpenAI.Codex`.
-- Windows PowerShell 5.1 (included with Windows 11).
-- A signed OpenJS Foundation Node.js 22+ runtime. The installer can discover the
-  compatible runtime bundled with Codex after a local Codex task has run, or an
-  official system Node.js installation in `PATH`.
-- A local MP4 file, from 1 KiB through 64 MiB, that you created, own, or are
-  licensed to use.
-
-Recommended video profile:
-
-| Setting | Recommendation |
-|---|---|
-| Container | MP4 |
-| Codec | H.264/AVC |
-| Pixel format | `yuv420p` |
-| Resolution | 1920×1080 |
-| Frame rate | 24–30 FPS |
-| Audio | Not needed; playback is always muted |
-| Size | Preferably below 40 MiB; hard limit 64 MiB |
-
-4K/60 FPS works on the validated machine, but it consumes more memory, GPU time,
-battery, and startup time.
-
-## Install
-
-Download the repository ZIP or clone it:
-
-```powershell
-git clone https://github.com/xlp294697-crypto/codex-neon-tides.git
-Set-Location .\codex-neon-tides
-```
-
-Close every Codex window and let active local tasks finish. Then run:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-NeonTides.ps1 `
-  -BackgroundVideo "C:\Videos\my-background.mp4"
-```
-
-Open Codex normally after the installer completes. The first launch will close
-and reopen once while the manager converts it into a themed launch. Initial
-application usually takes 20–90 seconds, depending on media size and machine
-speed.
-
-No administrator privileges are required.
-
-The installer:
-
-1. validates the Codex package, MP4 container/size, and signed Node runtime;
-2. chooses an unused high loopback port;
-3. copies only reviewed runtime files and a private copy of your video to
-   `%LOCALAPPDATA%\NeonTidesForCodex`;
-4. records the video hash and selected port in `install-manifest.json`;
-5. creates the per-user startup shortcut
-   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Neon Tides for Codex.lnk`;
-6. starts a singleton background manager for the current sign-in session.
-
-Your original video is never modified. Re-running the installer with another
-MP4 changes the installed copy. Close Codex before doing so.
-
-### If Node is not found
-
-First open Codex and run one local task, then try the installer again. This
-normally creates the Codex bundled runtime cache. Alternatively install an
-official Node.js 22+ Windows build and make `node.exe` available in `PATH`.
-
-The installer intentionally rejects an unsigned or unexpectedly signed
-`node.exe`, even when it reports a compatible version.
-
-## Check status
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Get-NeonTidesStatus.ps1
-```
-
-Example fields:
-
-```json
-{
-  "installed": true,
-  "startup_link_exists": true,
-  "disabled": false,
-  "loopback_listener": true,
-  "manager_status": "active"
-}
-```
-
-Manager states:
-
-| State | Meaning |
-|---|---|
-| `watching` | Manager is running and waiting for Codex. |
-| `injecting` | A normal launch is being converted and injected. |
-| `active` | CSS and video playback were verified. |
-| `repairing` | Renderer state was missing; in-place reinjection is running. |
-| `degraded` | Health/repair failed and will be retried. |
-| `backoff` | Full launch injection failed; retry is temporarily delayed. |
-| `disabled` | The local disable marker is present. |
-| `error` | Manager stopped after an unexpected error. |
-
-## How it works
-
-```mermaid
-flowchart TD
-    A[Per-user Startup shortcut] --> B[Singleton manager]
-    B --> C{Codex process state}
-    C -- Not running --> B
-    C -- Ordinary launch --> D[Validate Store package and free port]
-    D --> E[Start recovery watchdog]
-    E --> F[Relaunch package AUMID with loopback CDP]
-    F --> G[Verify listener address and package owner]
-    G --> H[Discover and fingerprint primary app target]
-    H --> I[Inject Neon Tides CSS]
-    I --> J[Transfer user MP4 in bounded chunks]
-    J --> K[Assemble in-memory Blob URL]
-    K --> L[Create muted autoplaying loop]
-    L --> M{Verify style and playback}
-    M -- Passed --> N[Keep themed Codex running]
-    M -- Failed --> O[Watchdog restores stock Codex]
-    C -- Themed launch --> P{15-second health check}
-    P -- Healthy --> N
-    P -- Missing after renderer reload --> H
-```
-
-The runtime is split into four trust boundaries:
-
-1. **Installer and manifest** — validates inputs, chooses the port, copies the
-   release, and creates an installation-specific startup shortcut.
-2. **Compatibility launcher** — verifies Store identity, signature, AUMID,
-   process paths, listener ownership, and CDP transport before any media is
-   transferred.
-3. **Injector** — accepts only the expected loopback HTTP/WebSocket endpoints,
-   fingerprints the primary `app:` target, injects CSS, and sends the MP4 in
-   384 KiB chunks. The renderer assembles an in-memory Blob URL.
-4. **Manager and watchdog** — verifies the full effect, repairs renderer-only
-   reloads, and returns to a normal non-CDP launch if initial injection does not
-   complete.
-
-## Security
-
-### Unauthenticated local DevTools access
-
-The themed app keeps a CDP endpoint on a random port at `127.0.0.1`. The
-endpoint is not reachable from another computer by default, but CDP itself has
-no authentication. Any untrusted process already running on the same computer
-may be able to find the port, inspect rendered Codex content, or modify the UI.
-
-Randomizing the port lowers accidental conflicts; it does **not** make CDP a
-secure authenticated service.
-
-Use Neon Tides only on a trusted single-user computer. Never:
-
-- change the debug address to `0.0.0.0`, a LAN address, or a public interface;
-- expose the selected port through Windows Firewall, a router, SSH, a tunnel,
-  or remote-development tooling;
-- enable the theme on a shared workstation or a machine that runs untrusted
-  local software.
-
-Read [SECURITY.md](SECURITY.md) for the complete threat model.
-
-### Codex restarts
-
-Applying, reconfiguring, disabling, or recovering the theme can close every
-Codex package process. Finish active tasks and close Codex before those
-operations. After a graceful-close timeout, the safety probe may force-close
-validated processes inside the signed package so a failed debug instance is not
-left behind.
-
-### Privacy and media rights
-
-The injector makes no non-loopback network request. Your installed MP4 remains
-on the computer and is copied into renderer memory through the local endpoint.
-The installed copy is unencrypted.
-
-This repository does not distribute a demo wallpaper. You must supply media you
-created, own, or have permission to use. The MIT license for this repository
-does not grant rights to wallpaper sites, stock footage, movies, music videos,
-or any other third-party media.
-
-Runtime JSON may contain local install paths, package versions, PIDs, hashes,
-and timestamps. Redact it before posting a public issue.
-
-## Compatibility
-
-This project relies on implementation details of the Windows desktop app. Only
-the following configuration has been directly validated:
-
-| Component | Validated configuration | Result |
-|---|---|---|
-| Operating system | Windows 11 build 26200 | Verified |
-| Codex package | `OpenAI.Codex` `26.818.5345.0` | Verified |
-| Windows PowerShell | `5.1.26100.9168` | Verified |
-| Node.js | Signed bundled Node `24.19.0` | Verified |
-| Video | H.264 MP4, 3840×2160, 60 FPS, about 26 MiB | Verified |
-| Ordinary full relaunch | Manager-driven injection | Verified |
-| Renderer/page recreation | Health check + in-place reinjection | Component-tested; full recovery depends on the installed Codex build |
-| Windows sign-in startup | Per-user Startup shortcut | Structurally verified |
-| Secondary/pop-out windows | Not fully covered | Partial |
-| Windows 10 | Not tested | Unknown |
-| macOS, Linux, web, CLI, IDE extension | Different architecture | Unsupported |
-
-A later Codex release may change process behavior, target discovery, internal
-class names, or DOM structure. Compatibility is best-effort and may break
-without warning.
-
-## Known limitations
-
-- This is not an official theme, plugin, extension, or documented API.
-- The primary Codex window briefly closes and reopens when an ordinary launch
-  is converted into a themed launch.
-- The entire video is held in Node memory and then renderer memory. Temporary
-  peak usage is higher than the MP4 size.
-- A renderer repair retransfers the complete MP4, so large videos recover more
-  slowly.
-- The video is always muted; audio is intentionally unsupported.
-- High-resolution/high-frame-rate video increases memory, GPU use, heat, and
-  battery drain.
-- The injector targets the primary app window. Secondary, pop-out, and special-
-  purpose windows may keep the stock appearance.
-- The Startup shortcut runs only after the current user signs in to Windows.
-- Managed enterprise devices may block scripts, AppX inspection, activation
-  arguments, WMI process creation, or local debugging endpoints.
-- The current implementation honors `prefers-reduced-motion` for CSS animation,
-  but it does not automatically pause the background video.
-
-## Troubleshooting
-
-### Codex opens but no video appears
-
-1. Wait up to 90 seconds after the first launch.
-2. Run `Get-NeonTidesStatus.ps1` and check the manager state.
-3. Open `%LOCALAPPDATA%\NeonTidesForCodex` and inspect the newest
-   `injection-result-*.json` or `repair-result-*.json`.
-4. A complete success must have `classification: APPLIED` and all of these set
-   to `true`: `theme_applied`, `style_verified`, `background_verified`,
-   `video_loop_verified`, `video_muted_verified`, and
-   `video_playback_verified`.
-5. Try a smaller H.264 1080p/30 FPS MP4.
-6. Close Codex and run the installer again with the replacement video.
-
-Optional FFmpeg conversion:
-
-```powershell
-ffmpeg -i ".\input.mp4" -vf "scale=-2:1080" -r 30 -c:v libx264 `
-  -pix_fmt yuv420p -an -movflags +faststart ".\background-compatible.mp4"
-```
-
-FFmpeg is optional and is not bundled.
-
-### Codex returns to the stock appearance
-
-The watchdog probably recovered from an incomplete injection. Look for:
-
-- `DEBUG_ENDPOINT_TIMEOUT`
-- `MAIN_TARGET_NOT_FOUND`
-- `THEME_VERIFICATION_FAILED`
-- `WATCHDOG_RECOVERY`
-- `INJECTION_WORKER_FAILED`
-
-Do not repeatedly force-launch a failed themed instance; stock recovery is a
-safety feature.
-
-### Port conflict
-
-The selected port is stored in:
+`127.0.0.1:3002` 只代表服务器本机内部端口。正式访客应打开：
 
 ```text
-%LOCALAPPDATA%\NeonTidesForCodex\install-manifest.json
+https://你的域名/
 ```
 
-The installer normally chooses a free high port. If a later process occupies
-it, close the owning application normally or reinstall while Codex is closed to
-select another port. Do not terminate an unknown process merely to free a port,
-and never resolve the problem by binding CDP to a network interface.
+正确链路是：
 
-### A Codex update broke the theme
+```text
+访客浏览器 → 域名 DNS → 服务器 443/HTTPS → Caddy 或 Nginx → 网站程序 3002 内部端口
+```
 
-Collect sanitized versions and booleans:
+不要把 `3002` 端口直接暴露到公网，也不要把 `127.0.0.1` 发给客户。后台地址是 `https://你的域名/admin`，官网不公开展示后台入口。
+
+## 推荐方案：Docker + 自动 HTTPS
+
+适合已经安装 Docker Compose、拥有公网 IP 和域名的 Linux 服务器。镜像基于 Linux；Windows 10/11 只有在已配置受支持的 Linux 容器运行时后才能使用这条路径。Docker Desktop 官方不支持 Windows Server，标准 Windows Server Docker 运行时也不能直接运行本包的 Alpine Linux 镜像；Windows Server 请使用下文“Windows 原生运行”，或先建立受支持的 Linux 虚拟机。`compose.yaml` 会同时启动网站和 Caddy；Caddy 根据域名自动申请和续期 HTTPS 证书。
+
+### 1. 解压并初始化安全配置
+
+Linux：
+
+```bash
+cd /opt/jiuyue-sports
+chmod +x start-linux.sh tools/*.sh
+./tools/initialize-config.sh
+```
+
+Windows PowerShell：
 
 ```powershell
-Get-AppxPackage -Name OpenAI.Codex | Select-Object Name, Version, Status
-node --version
-.\Get-NeonTidesStatus.ps1
+Set-Location C:\jiuyue-sports
+powershell -ExecutionPolicy Bypass -File .\tools\Initialize-Config.ps1
 ```
 
-When opening an issue, include the Windows build, Codex version, Node version,
-video codec/resolution/size, injection classification, and whether stock
-recovery succeeded. Remove user names, absolute local paths, task/chat content,
-and credentials.
+初始化脚本会安全读取你设置的后台密码；密码必须为 16–250 位，并至少包含大写字母、小写字母、数字、符号中的三类，且不得包含常见弱口令、品牌词或手机号码。脚本只把不可逆的 scrypt 哈希和随机会话密钥写入 `.env`；程序没有默认后台密码。机器只有 Docker、没有 Node.js 时，初始化脚本会使用一次性 Node 容器生成配置。
 
-## Disable or uninstall
+### 2. 填写真实域名
 
-Disable the manager, remove its startup shortcut, and restore a stock Codex
-launch while keeping installed files:
+编辑 `.env`，把：
+
+```text
+SITE_DOMAIN=replace.example.com
+```
+
+改为实际域名，例如：
+
+```text
+SITE_DOMAIN=sports.example.cn
+```
+
+不要加 `http://`、`https://`、路径或端口。
+
+若已经取得 ICP 备案号，同时填写：
+
+```text
+ICP_NUMBER=苏ICP备XXXXXXXX号-X
+```
+
+程序会在首页底部居中显示并链接工信部备案系统。没有取得备案号时保持空值，不能填写虚构编号。
+
+后台日/小时报表默认按北京时间统计：
+
+```text
+REPORT_TIME_ZONE=Asia/Shanghai
+```
+
+如果实际运营地不使用北京时间，可改成服务器 Node.js 支持的 IANA 时区名称；修改后重启应用。不要使用 `UTC+8` 这类非 IANA 别名。
+
+### 3. 配置 DNS 和防火墙
+
+- 域名 `A` 记录指向服务器公网 IPv4；使用 IPv6 时再添加正确的 `AAAA` 记录。
+- 路由器或云安全组向服务器开放 TCP `80`、TCP `443`，如使用 HTTP/3 可同时开放 UDP `443`。
+- 不对公网开放 `3002`。
+- 若服务器位于中国大陆，按接入商和主管部门的现行要求完成网站备案、主体信息展示等上线手续。
+
+### 4. 启动
+
+```bash
+docker compose config >/dev/null
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 app caddy
+```
+
+验证：
+
+```bash
+curl -fsS https://你的域名/api/health
+```
+
+成功时返回包含 `"ok":true` 的 JSON。随后检查：
+
+- `https://你的域名/`
+- `https://你的域名/privacy`
+- `https://你的域名/admin`
+
+Compose 已配置 `restart: unless-stopped`，正常重启或断电恢复后 Docker 会自动拉起服务；仍需确认 Docker 服务本身已设为开机启动。
+
+## 已有 Nginx、Caddy 或硬件反向代理
+
+如果硬件层已经负责域名和 HTTPS，只启动应用：
+
+```bash
+docker compose -f compose.app-only.yaml config >/dev/null
+docker compose -f compose.app-only.yaml up -d --build
+```
+
+默认 `APP_BIND_IP=127.0.0.1`，因此应用只在服务器回环地址监听 `127.0.0.1:3002`，适合同一台服务器上的代理。把同机代理上游指向该地址。示例位于：
+
+- `deploy/Caddyfile.example`
+- `deploy/nginx-site.conf.example`
+
+替换示例域名和证书路径后再启用。代理必须覆盖客户端传入的 `X-Forwarded-For`，不能原样信任公网请求头；随包 Nginx 示例已使用真实连接地址覆盖。
+
+如果反向代理是另一台硬件设备，回环地址无法跨机器访问。把 `.env` 的 `APP_BIND_IP` 改成网站服务器的固定私网 IP，再重新启动 `compose.app-only.yaml`，并在主机防火墙中只允许该代理设备的源 IP 访问端口 3002。例如：
+
+```text
+APP_BIND_IP=192.168.10.20
+```
+
+不要为了省事直接设为 `0.0.0.0` 并向整个公网开放 3002；代理与网站服务器不在可信内网时，还应在二者之间使用 VPN、受控专线或加密上游。
+
+## Windows 原生运行
+
+要求安装 Node.js 20 或更高版本，建议系统级安装到 `Program Files`。程序和数据必须放在服务器本地磁盘，不要放在 S4U 任务无法访问的网络共享中。
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-NeonTides.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\Initialize-Config.ps1
+.\Start-Windows.ps1
 ```
 
-Disable, restore stock Codex, and remove the manifest-validated default install:
+也可双击 `启动网站.cmd` 进行前台运行。正式服务仍应由 Caddy/Nginx 提供 HTTPS，`.env` 中保持：
+
+```text
+HOST=127.0.0.1
+COOKIE_SECURE=true
+TRUST_PROXY=true
+```
+
+以管理员身份安装开机自启任务。默认使用当前账户的 S4U、Limited 令牌，不保存账户密码；安装脚本会固定并验证 Node.js 的绝对路径，拒绝 SYSTEM/LOCAL SERVICE/NETWORK SERVICE：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-NeonTides.ps1 -Purge
+powershell -ExecutionPolicy Bypass -File .\tools\Install-Windows-Autostart.ps1
+Get-ScheduledTask -TaskName JiuyueSportsWebsite
+Get-ScheduledTaskInfo -TaskName JiuyueSportsWebsite
 ```
 
-The uninstaller does not touch your original source video, chats, Codex
-settings, repositories, or the signed app package. `-Purge` refuses to recurse
-through arbitrary/custom paths and deletes only known Neon Tides files from the
-default installation directory.
-
-## Development
-
-Run the release checks before committing:
+若已经建立专用的普通本地账户，可显式指定（账户必须能读取程序目录；脚本会自动收紧 `.env`、`data` 和 `backups` 的 ACL）：
 
 ```powershell
-.\tests\Validate-Release.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\Install-Windows-Autostart.ps1 `
+  -RunAsUser 'SERVER\JiuyueWeb' `
+  -NodePath 'C:\Program Files\nodejs\node.exe'
 ```
 
-The check parses every PowerShell script, runs `node --check` on the injector,
-verifies release markers, and rejects media, Windows shortcuts, private-path
-signatures, and common credential patterns.
+移除任务：
 
-The GitHub Actions workflow performs the same checks on `windows-latest`.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Uninstall-Windows-Autostart.ps1
+```
 
-## Project status
+该任务使用 S4U 在开机时启动，不依赖用户交互登录，也不授予 SYSTEM 权限，因此解决了“关机或长时间不打开后 127.0.0.1 拒绝连接”的原型问题。S4U 账户不能依赖网络盘或需要用户解锁的加密文件。反向代理也必须单独配置成系统服务。Windows 原生方式对接另一台硬件代理时，应把 `.env` 的 `HOST`（不是 `APP_BIND_IP`）改为网站服务器固定私网 IP，并只在防火墙中放行该代理源 IP。
 
-Neon Tides is experimental. Focused compatibility fixes are welcome. Please do
-not submit personal background videos, private chat screenshots, unredacted
-diagnostics, authentication files, cookies, tokens, OpenAI application
-packages, or proprietary product assets.
+## Linux 原生运行
 
-## License and non-affiliation
+要求 Node.js 20 或更高版本。示例安装位置为 `/opt/jiuyue-sports`：
 
-Original source and documentation are available under the [MIT License](LICENSE).
-See [NOTICE.md](NOTICE.md) for attribution and trademark notices.
+```bash
+id -u jiuyue >/dev/null 2>&1 || sudo useradd --system --home /opt/jiuyue-sports --shell /usr/sbin/nologin jiuyue
+sudo chown -R root:root /opt/jiuyue-sports
+sudo chmod 755 /opt/jiuyue-sports/start-linux.sh /opt/jiuyue-sports/tools/*.sh
+sudo /bin/sh /opt/jiuyue-sports/tools/initialize-config.sh
+sudo chown root:jiuyue /opt/jiuyue-sports/.env
+sudo chmod 640 /opt/jiuyue-sports/.env
+sudo chown -R jiuyue:jiuyue /opt/jiuyue-sports/data /opt/jiuyue-sports/backups
+sudo chmod 700 /opt/jiuyue-sports/data /opt/jiuyue-sports/backups
+sudo cp /opt/jiuyue-sports/deploy/jiuyue-sports.service.example /etc/systemd/system/jiuyue-sports.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now jiuyue-sports
+sudo systemctl status jiuyue-sports
+```
 
-This independent project is not affiliated with, endorsed by, sponsored by,
-maintained by, or supported by OpenAI.
+代码由 root 持有且对服务账户只读；只有 `data` 和 `backups` 归 `jiuyue` 所有。先确认 Node.js 的实际路径是 unit 中的 `/usr/bin/node`，否则先修改 `ExecStart`。然后安装 Caddy 或 Nginx，使用 `deploy/` 中的反向代理示例。默认应用服务只监听回环地址；若 Linux 原生方式对接另一台硬件代理，同样把 `.env` 的 `HOST` 改成服务器固定私网 IP，并设置来源白名单。
+
+启用每日备份定时器：
+
+```bash
+sudo cp /opt/jiuyue-sports/deploy/jiuyue-backup.service.example /etc/systemd/system/jiuyue-backup.service
+sudo cp /opt/jiuyue-sports/deploy/jiuyue-backup.timer.example /etc/systemd/system/jiuyue-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now jiuyue-backup.timer
+systemctl list-timers jiuyue-backup.timer
+```
+
+## 管理后台
+
+地址：`https://你的域名/admin`
+
+后台支持：
+
+- 查看访问量、随机标识访客数、总预约量和同口径统计转化率；
+- 查看资质区、成果区和图片互动；
+- 查看家长联系电话、年级、课程和需求；仅对另行同意统计的预约显示来源归因；
+- 把预约标记为新线索、已联系、已到店、已报名或无效；
+- 响应个人信息删除请求时永久删除对应预约。
+
+流量统计只有在访客点击“同意统计”后才启动。拒绝统计不影响网站和预约表单，也不会把页面、来源或活动参数写入具名预约。随机访客标识只用于去标识化事件统计，不会保存到具名预约；告知版本变化时会重新征求选择。后台“预约量”是全部预约，“转化率”是触发预约成功事件的去重随机标识访客数除以去重随机标识访客数，二者口径不同，不能用总预约量反推该比例。预约同意也不等于同意任意营销：如果以后要发促销短信、加入第三方广告平台或做与本次咨询无关的推广，应在实际业务流程中另行评估合法依据、告知和同意要求。
+
+## 数据与备份
+
+原生运行的数据文件：
+
+```text
+data/site-data.json
+```
+
+Windows 备份：
+
+```powershell
+.\tools\Backup-Data.ps1
+# 可选：改为保留 180 天
+.\tools\Backup-Data.ps1 -RetentionDays 180
+```
+
+Linux 原生备份（必须使用网站服务账户，避免权限错位）：
+
+```bash
+sudo -u jiuyue /bin/sh /opt/jiuyue-sports/tools/backup-data.sh
+# 可选的第二个参数是保留天数
+sudo -u jiuyue /bin/sh /opt/jiuyue-sports/tools/backup-data.sh /opt/jiuyue-sports/backups 180
+```
+
+Docker 备份：
+
+```powershell
+.\tools\Backup-Docker-Data.ps1
+# app-only 模式显式指定对应 Compose 文件
+.\tools\Backup-Docker-Data.ps1 -ComposeFile .\compose.app-only.yaml
+```
+
+或：
+
+```bash
+./tools/backup-docker-data.sh ./compose.yaml
+# app-only 模式
+./tools/backup-docker-data.sh ./compose.app-only.yaml
+```
+
+每次备份都会生成 JSON 和同名 SHA-256 文件，校验文件只记录可移动的文件名，不记录原服务器绝对路径。脚本默认轮换 90 天以前的本包备份；PowerShell 用 `-RetentionDays` 调整，Shell 用第二/第三个位置参数或已导出的 `BACKUP_RETENTION_DAYS` 调整。Windows 脚本会把备份 ACL 限制为当前账户、SYSTEM 和管理员组，Linux 脚本使用 `0600` 文件与 `0700` 目录。至少把备份再复制到一处不与网站服务器共盘的位置，并定期实际演练恢复。备份含家长电话等个人信息，必须在支持访问控制的加密介质中保存。收到个人信息删除请求时，先删除在线记录并登记待处理范围，让相关记录随过期备份销毁；如果在此之前执行灾难恢复，必须重新执行删除清单，不能让已删除记录恢复为日常可用数据。
+
+恢复脚本默认要求同名 `.sha256.txt` 并在替换前校验；只有明确接受完整性风险时才使用 `-SkipHashCheck` 或 `--skip-hash-check`。原生恢复会先为当前数据创建带哈希的安全副本。Windows 计划任务方式：
+
+```powershell
+Stop-ScheduledTask -TaskName JiuyueSportsWebsite
+.\tools\Restore-Data.ps1 -BackupFile .\backups\site-data-YYYYMMDD-HHMMSS.json
+Start-ScheduledTask -TaskName JiuyueSportsWebsite
+```
+
+Linux 原生方式必须始终以 `jiuyue` 账户写回数据：
+
+```bash
+sudo systemctl stop jiuyue-sports
+sudo -u jiuyue /bin/sh /opt/jiuyue-sports/tools/restore-data.sh \
+  /opt/jiuyue-sports/backups/site-data-YYYYMMDD-HHMMSS.json
+sudo systemctl start jiuyue-sports
+curl -fsS http://127.0.0.1:3002/api/health
+```
+
+Docker 恢复由脚本完成“哈希校验—当前数据安全副本—停止 app—以容器 `node` 所有权替换—重启—健康检查”：
+
+```powershell
+.\tools\Restore-Docker-Data.ps1 -BackupFile .\backups\site-data-docker-YYYYMMDD-HHMMSS.json
+# app-only 模式
+.\tools\Restore-Docker-Data.ps1 -BackupFile .\backups\site-data-docker-YYYYMMDD-HHMMSS.json `
+  -ComposeFile .\compose.app-only.yaml
+```
+
+```bash
+./tools/restore-docker-data.sh ./backups/site-data-docker-YYYYMMDD-HHMMSS.json ./compose.yaml
+```
+
+不要在应用仍写入数据时手工覆盖文件。`docker compose down` 不会删除命名卷，但 **绝对不要使用 `docker compose down -v`**，也不要在没有可恢复备份时执行带卷清理的 `docker system prune`；这些操作会删除询盘数据卷，`-v` 还会删除 Caddy 证书卷。
+
+## 上线前测试
+
+安装 Node.js 20+ 后，在程序目录执行：
+
+```bash
+npm run check
+npm test
+```
+
+如果没有 npm，可直接运行：
+
+```bash
+node --check server.mjs
+node --check public/app.js
+node --check public/admin.js
+node --test
+```
+
+测试会使用临时数据目录和测试凭据，不会修改正式 `data/site-data.json`。
+
+## 常见故障
+
+### 浏览器显示“127.0.0.1 拒绝连接”
+
+网站进程未运行，或只安装了前台启动方式。Docker 模式检查 `docker compose ps` 和日志；Windows 原生模式同时检查 `Get-ScheduledTask` 与 `Get-ScheduledTaskInfo` 的 `LastTaskResult`；Linux 检查 `systemctl status jiuyue-sports`。
+
+### 服务器本机能打开，外部浏览器打不开
+
+依次检查域名 DNS、公网 IP、路由/NAT、云安全组、防火墙、80/443 端口、反向代理和 HTTPS 证书。`127.0.0.1` 本来就只能由同一台机器访问；另一台硬件代理必须使用网站服务器私网 IP，并只对白名单代理开放 3002。
+
+### 后台密码正确但仍返回登录页
+
+正式配置的后台 Cookie 只允许通过 HTTPS 发送。请使用 `https://你的域名/admin`，不要从公网用明文 HTTP 或直接用 `http://服务器IP:3002/admin`。同时检查服务器时间是否准确。
+
+### 图片不显示
+
+确认 `public/media/` 中 22 张发布版 JPEG 全部存在，并且代理没有重写 `/assets/media/` 路径。不要用原始证照目录覆盖该文件夹。
+
+### 端口被占用
+
+修改 `.env` 的 `PORT`，并同步修改反向代理上游或 Compose 端口。Docker 全套模式内部固定使用 3002，一般无需修改。
+
+## 能力边界
+
+- 当前数据层是单实例 JSON 原子写入，适合单企业官网、常规询盘与内容统计。多台应用并行写入或高并发业务应迁移到受控数据库。
+- 当前不发送短信、邮件或微信通知；新询盘在 `/admin` 查看。接入外部通知、CRM、支付、地图或第三方统计前，应单独配置凭据、最小权限、失败重试与隐私告知。
+- `public/privacy.html` 是与当前程序行为一致的运营模板，不替代针对实际托管、人员权限、线下营销和未成年人业务流程的专业法律审查。
+- 程序不会自行发布到你的服务器，也不包含任何服务器、域名、云平台或证书凭据。
+
+完整上线核对见 `DEPLOYMENT-CHECKLIST.md`，安全运维见 `SECURITY.md`。
+
+## 官方部署参考
+
+- [Caddy 自动 HTTPS 的域名、端口与持久化要求](https://caddyserver.com/docs/automatic-https)
+- [Node.js 官方 Docker 镜像与可用架构](https://github.com/nodejs/docker-node)
+- [Node.js 容器安全最佳实践](https://github.com/nodejs/docker-node/blob/main/docs/BestPractices.md)
+- [Docker Desktop 的 Windows 支持边界（不支持 Windows Server）](https://docs.docker.com/desktop/setup/install/windows-install/)
+- [工信部《非经营性互联网信息服务备案管理办法》](https://www.miit.gov.cn/gyhxxhb/jgsj/cyzcyfgs/bmgz/xxtxl/art/2024/art_84a0cfa0ebd049bbbe751dca9a008e56.html)

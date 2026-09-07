@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>氿悦体育｜预约与流量看板</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body class="admin-body">
+  <header class="admin-header">
+    <a class="brand" href="/"><span class="brand-mark">悦</span><span>氿悦体育<small>JIUYUE SPORTS</small></span></a>
+    <span>内部管理后台</span>
+  </header>
+  <main id="booking-dashboard" class="admin-shell">
+    <section id="login-view" class="login-card">
+      <p class="eyebrow">ADMINISTRATION</p>
+      <h1>预约与流量看板</h1>
+      <p>查看家长预约、访问来源和页面互动情况。</p>
+      <form id="login-form">
+        <label>管理员密码<input type="password" name="password" required autocomplete="current-password"></label>
+        <button class="button primary" type="submit">登录 <span>→</span></button>
+        <p id="login-status" class="form-status" role="status"></p>
+      </form>
+      <a href="/" class="back-link">← 返回官网</a>
+    </section>
+
+    <section id="dashboard-view" hidden>
+      <div class="dashboard-top">
+        <div><p class="eyebrow">LIVE OVERVIEW</p><h1>预约与流量看板</h1><p>数据保存在当前网站实例中，请按隐私请求及时更正或删除。</p></div>
+        <div class="dashboard-actions"><a class="button quiet" href="/" target="_blank">查看官网</a><button id="logout" class="button quiet">退出登录</button></div>
+      </div>
+      <div id="metric-cards" class="dashboard-metrics"></div>
+      <div id="engagement-cards" class="dashboard-metrics compact"></div>
+      <div class="dashboard-grid">
+        <section class="dashboard-card"><div class="card-title"><h2>最近 7 天（北京时间）</h2><span>同意统计访问 / 全部预约（口径不同）</span></div><div id="daily-chart" class="daily-chart"></div></section>
+        <section class="dashboard-card"><div class="card-title"><h2>访问来源</h2><span>仅统计页面访问</span></div><div id="source-chart" class="bar-chart"></div></section>
+        <section class="dashboard-card"><div class="card-title"><h2>热门内容</h2><span>证书图片打开次数</span></div><div id="top-image-chart" class="bar-chart"></div></section>
+      </div>
+      <section class="dashboard-card enquiries-card">
+        <div class="card-title"><div><h2>最新预约</h2><span>跟进家长需求并更新状态。</span></div><button id="refresh" class="text-button">刷新数据 <span>↻</span></button></div>
+        <div class="table-wrap"><table><thead><tr><th>收到时间</th><th>家长与电话</th><th>孩子年级</th><th>意向课程</th><th>方便联系时间</th><th>当前困扰</th><th>来源</th><th>状态</th></tr></thead><tbody id="inquiry-rows"></tbody></table></div>
+      </section>
+    </section>
+  </main>
+  <script src="/assets/admin.js"></script>
+</body>
+</html>

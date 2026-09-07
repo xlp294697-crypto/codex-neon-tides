@@ -1,0 +1,15 @@
+{
+  "name": "jiuyue-sports-production",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "氿悦体育独立站生产部署程序：官网、预约询盘、经同意的去标识化流量统计与管理后台。",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check public/app.js && node --check public/admin.js",
+    "test": "node --test"
+  }
+}

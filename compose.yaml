@@ -1,0 +1,61 @@
+name: jiuyue-sports
+
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3002
+      DATA_PATH: /app/data/site-data.json
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: "true"
+      ENABLE_HSTS: "false"
+    expose:
+      - "3002"
+    volumes:
+      - jiuyue_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?请先在.env中填写SITE_DOMAIN}
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        case "$${SITE_DOMAIN}" in
+          replace.example.com|example.com|'') echo "请先把 .env 中的 SITE_DOMAIN 改成真实域名" >&2; exit 1 ;;
+        esac
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  jiuyue_data:
+  caddy_data:
+  caddy_config:

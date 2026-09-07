@@ -1,0 +1,32 @@
+name: jiuyue-sports
+
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3002
+      DATA_PATH: /app/data/site-data.json
+      TRUST_PROXY: "true"
+      COOKIE_SECURE: "true"
+      ENABLE_HSTS: "false"
+    ports:
+      - "${APP_BIND_IP:-127.0.0.1}:${PORT:-3002}:3002"
+    volumes:
+      - jiuyue_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  jiuyue_data:

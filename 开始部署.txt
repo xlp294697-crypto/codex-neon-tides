@@ -1,0 +1,19 @@
+氿悦体育独立站生产程序——开始部署
+
+1. 先核对压缩包旁的 SHA-256 文件，再解压。
+2. Linux 服务器推荐安装 Docker Compose，使用 compose.yaml 同时启动网站和自动 HTTPS；Windows Server 请按 README 使用原生 Node.js 或 Linux 虚拟机。
+3. 运行 tools\Initialize-Config.ps1（Windows）或 tools/initialize-config.sh（Linux），设置 16–250 位且至少包含三类字符的后台密码。
+4. 编辑 .env，把 SITE_DOMAIN=replace.example.com 改成真实域名。
+5. 把域名 DNS 指向服务器，只向公网开放 80/443，不开放 3002。
+6. 在程序目录运行：docker compose up -d --build
+7. 打开：https://你的域名/ 和 https://你的域名/admin
+8. 执行一次测试预约、检查后台、执行一次备份，再正式推广。
+
+重要：
+- 127.0.0.1 是服务器内部地址，不是客户访问地址。
+- 另一台硬件反向代理需要使用服务器私网 IP，并在防火墙中只允许该代理访问 3002。
+- 程序没有默认后台密码，也不会附带 .env 或服务器凭据。
+- 正式包不包含制作电脑上的历史询盘、访问记录或日志。
+- 不要执行 docker compose down -v，它会删除询盘数据卷。
+- 详细命令、原生 Windows/Linux 方式和故障排查请阅读 README.md。
+- 上线前逐项完成 DEPLOYMENT-CHECKLIST.md。
