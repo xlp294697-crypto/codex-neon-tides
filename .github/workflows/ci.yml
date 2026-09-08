@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  quality:
+    name: quality (${{ matrix.gate }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gate: format
+            script: format:check
+          - gate: lint
+            script: lint
+          - gate: syntax
+            script: check
+          - gate: unit
+            script: test:unit
+          - gate: integration
+            script: test:integration
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run "${NPM_SCRIPT}"
+        env:
+          NPM_SCRIPT: ${{ matrix.script }}
+
+  e2e:
+    name: e2e (Chromium desktop and mobile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      # Browser diagnostics stay local to this job; do not publish form/session data.
+
+  dependency-audit:
+    name: dependency-audit (production)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --omit=dev --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=high
+
+  container-build:
+    name: container-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: docker build -t jiuyue-sports:ci .
+      - run: docker save --output "${RUNNER_TEMP}/jiuyue-sports.tar" jiuyue-sports:ci
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: container-${{ github.sha }}
+          path: ${{ runner.temp }}/jiuyue-sports.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  container-scan:
+    name: container-scan (Trivy)
+    needs: container-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read # SARIF upload reads workflow status in private repositories.
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: container-${{ github.sha }}
+          path: ${{ runner.temp }}/container
+      - name: Create explicit scanner configuration
+        run: printf '{}\n' > "${RUNNER_TEMP}/trivy.yaml"
+      - name: Scan the exact built image
+        id: trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: image
+          input: ${{ runner.temp }}/container/jiuyue-sports.tar
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: sarif
+          limit-severities-for-sarif: true
+          output: trivy-results.sarif
+          timeout: 10m
+          cache: false
+          trivy-config: ${{ runner.temp }}/trivy.yaml
+        env:
+          # A PR must not suppress findings through an implicit ignore file.
+          TRIVY_IGNOREFILE: /dev/null
+      - name: Upload SARIF even when vulnerabilities fail the scan
+        if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container
+      - name: Preserve the scan report
+        if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: trivy-sarif-${{ github.sha }}
+          path: trivy-results.sarif
+          if-no-files-found: error
+          retention-days: 7
