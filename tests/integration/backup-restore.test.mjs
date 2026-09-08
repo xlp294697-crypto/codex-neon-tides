@@ -256,6 +256,34 @@ async function makeBackup(f) {
   assert.equal(files.length, 1);
   return path.join(f.backups, files[0]);
 }
+
+test('README restore command follows the real CLI confirmation contract', async (t) => {
+  const f = await fixture(t);
+  const backup = await makeBackup(f);
+  const readme = await readFile(
+    new URL('../../README.md', import.meta.url),
+    'utf8',
+  );
+  const documented = readme
+    .split(/\r?\n/)
+    .find((line) => line.startsWith('node tools/restore-sqlite.mjs '));
+  assert.ok(documented, 'README must contain one runnable restore command');
+  const tokens = documented.split(/\s+/);
+  const databaseIndex = tokens.indexOf('--database');
+  const confirmationIndex = tokens.indexOf('--confirm-target');
+  assert.ok(tokens.includes('--app-stopped'));
+  assert.ok(databaseIndex > 1 && confirmationIndex > databaseIndex);
+  assert.equal(path.isAbsolute(tokens[databaseIndex + 1]), true);
+  assert.equal(tokens[confirmationIndex + 1], tokens[databaseIndex + 1]);
+
+  const target = path.join(f.directory, 'documented-restore.db');
+  const args = tokens.slice(2);
+  args[args.indexOf('--backup') + 1] = backup;
+  args[args.indexOf('--database') + 1] = target;
+  args[args.indexOf('--confirm-target') + 1] = target;
+  const result = run('restore-sqlite', args);
+  assert.equal(result.status, 0, result.error);
+});
 test('online backup captures committed WAL records and portable verified restore preserves every table', async (t) => {
   const f = await fixture(t);
   const expected = snapshot(f.db);

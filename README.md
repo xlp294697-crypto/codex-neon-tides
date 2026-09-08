@@ -254,7 +254,7 @@ node tools/backup-sqlite.mjs --database ./data/site.db --directory ./backups --r
 恢复前必须停止应用；恢复工具默认校验配套 SHA-256、SQLite 完整性、外键和迁移兼容性，并先在 `pre-restore-backups/` 创建当前数据库安全副本：
 
 ```bash
-node tools/restore-sqlite.mjs --backup ./backups/jiuyue-时间戳-标识.db --database ./data/site.db --application-stopped
+node tools/restore-sqlite.mjs --backup /opt/jiuyue-sports/backups/jiuyue-时间戳-标识.db --database /opt/jiuyue-sports/data/site.db --app-stopped --confirm-target /opt/jiuyue-sports/data/site.db
 ```
 
 不要手工复制单个 WAL 模式数据库文件，也不要提交任何 `.db`、`-wal`、`-shm`、发布恢复点或恢复前快照。至少把一份已验证备份复制到服务器之外的受控加密存储，并按月实际演练恢复。
