@@ -25,6 +25,7 @@ export function createResponseHelpers({ enableHsts, maxBodyBytes }) {
       'Content-Type': contentType,
       'Content-Length': body.length,
       ...headers,
+      'X-Request-Id': req.requestId,
     });
     if (req.method === 'HEAD') res.end();
     else res.end(body);
@@ -75,7 +76,7 @@ export function createResponseHelpers({ enableHsts, maxBodyBytes }) {
         throw new Error('not-an-object');
       return parsed;
     } catch {
-      throw new HttpError(400, '请求内容必须是有效的 JSON 对象。');
+      throw new HttpError(400, '请求内容必须是有效的 JSON 对象。', 'INVALID_JSON');
     }
   }
 

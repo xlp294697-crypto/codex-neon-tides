@@ -102,10 +102,24 @@ function eventContext() {
 }
 
 async function request(url, options = {}) {
-  const response = await fetch(url, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || '提交失败，请稍后再试。');
-  return data;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    let response;
+    let data;
+    try {
+      response = await fetch(url, { ...options, signal: controller.signal });
+      data = await response.json();
+    } catch {
+      throw new Error(controller.signal.aborted
+        ? '请求超时，请稍后重试；预约可能已提交，请勿连续重复提交。'
+        : '网络连接异常，请检查网络后重试。');
+    }
+    if (!response.ok) throw new Error(data.error?.message || '提交失败，请稍后再试。');
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function track(eventType, details = {}) {
@@ -222,7 +236,12 @@ document.addEventListener('keydown', (event) => {
 
 document.querySelector('#booking-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const fields = Object.fromEntries(new FormData(event.currentTarget));
+  const form = event.currentTarget;
+  if (form.dataset.submitting === 'true') return;
+  const fields = Object.fromEntries(new FormData(form));
+  const button = form.querySelector('[type="submit"]');
+  form.dataset.submitting = 'true';
+  button.disabled = true;
   const status = document.querySelector('#status');
   status.textContent = '正在提交…';
   status.className = 'form-status';
@@ -249,11 +268,14 @@ document.querySelector('#booking-form').addEventListener('submit', async (event)
         analyticsConsentAt: analyticsAllowed ? getConsentAt() : '',
       }),
     });
-    await track('booking_success', { section: 'assessment' });
-    event.currentTarget.reset();
+    void track('booking_success', { section: 'assessment' });
+    form.reset();
     status.textContent = '预约已提交，我们会尽快与您电话联系。';
   } catch (error) {
     status.textContent = error.message;
     status.className = 'form-status error';
+  } finally {
+    form.dataset.submitting = 'false';
+    button.disabled = false;
   }
 });

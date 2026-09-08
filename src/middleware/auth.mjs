@@ -8,13 +8,12 @@ export function safeEqual(left, right) {
   return timingSafeEqual(a, b);
 }
 
-export function createAuth(config) {
+export function createAuth(config, sessionRepository) {
   const {
     adminPassword: ADMIN_PASSWORD, adminPasswordHash: ADMIN_PASSWORD_HASH,
     sessionSecret: SESSION_SECRET, sessionHours: SESSION_HOURS,
     cookieSecure: COOKIE_SECURE,
   } = config;
-  const adminSessions = new Map();
 
   function verifyAdminPassword(password) {
     if (ADMIN_PASSWORD_HASH) {
@@ -35,16 +34,23 @@ export function createAuth(config) {
       .digest('base64url');
   }
 
+  function hash(value) {
+    return createHmac('sha256', SESSION_SECRET).update(value).digest('hex');
+  }
+
   function newSession() {
     const token = randomBytes(32).toString('base64url');
     const cookie = `${token}.${sign(token)}`;
+    const csrfToken = sign(`csrf:${cookie}`);
     const session = {
-      token,
+      tokenHash: hash(token),
+      csrfTokenHash: hash(csrfToken),
       role: 'admin',
-      exp: Date.now() + SESSION_HOURS * 3600000,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + SESSION_HOURS * 3600000,
     };
-    adminSessions.set(token, session);
-    return { ...session, cookie, csrfToken: sign(`csrf:${cookie}`) };
+    sessionRepository.saveSession(session);
+    return { ...session, cookie, csrfToken };
   }
 
   function getCookie(req, name) {
@@ -65,17 +71,20 @@ export function createAuth(config) {
     const token = cookie.slice(0, separator);
     const signature = cookie.slice(separator + 1);
     if (!safeEqual(sign(token), signature)) return null;
-    const session = adminSessions.get(token);
+    const tokenHash = hash(token);
+    const session = sessionRepository.findSession(tokenHash);
+    const csrfToken = sign(`csrf:${cookie}`);
     if (
       !session ||
       session.role !== 'admin' ||
-      !Number.isFinite(session.exp) ||
-      session.exp <= Date.now()
+      !Number.isFinite(session.expiresAt) ||
+      session.expiresAt <= Date.now() ||
+      !safeEqual(session.csrfTokenHash, hash(csrfToken))
     ) {
-      adminSessions.delete(token);
+      if (session) sessionRepository.deleteSession(tokenHash);
       return null;
     }
-    return { ...session, cookie, csrfToken: sign(`csrf:${cookie}`) };
+    return { ...session, cookie, csrfToken };
   }
 
   function requireAdmin(req) {
@@ -96,15 +105,12 @@ export function createAuth(config) {
     return attributes.join('; ');
   }
 
-  function invalidateSession(token) {
-    adminSessions.delete(token);
+  function invalidateSession(tokenHash) {
+    sessionRepository.deleteSession(tokenHash);
   }
 
   function cleanupExpiredState() {
-    const now = Date.now();
-    for (const [token, session] of adminSessions) {
-      if (session.exp <= now) adminSessions.delete(token);
-    }
+    sessionRepository.prune();
   }
 
   return { verifyAdminPassword, newSession, readSession, requireAdmin, sessionCookie, invalidateSession, cleanupExpiredState };

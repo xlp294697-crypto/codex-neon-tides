@@ -49,9 +49,11 @@ SQLite 启用 WAL、外键约束和合理的 busy timeout。`db/` 负责连接�
 
 所有业务 SQL 与事务保存在 `repositories/`。预约状态变更和审计、删除和审计、每批统计、容量淘汰分别原子执行；容量淘汰同样生成无正文的删除审计。仓储把数据库列映射为现有 camelCase API 字段。事务使用可嵌套的同步 savepoint，让 JSON 导入覆盖全部业务记录，失败时统一回滚。
 
-`createSessionRepository(db)` 提供 `saveSession({ tokenHash, csrfTokenHash, role, createdAt, expiresAt })`、`findSession(tokenHash, now?)`、`deleteSession(tokenHash)`、`prune(now?)`；读取在到期边界删除记录并返回 `null`。此阶段认证仍使用内存会话，后续认证任务将注入该仓储实现重启后的会话恢复。
+`createSessionRepository(db)` 提供 `saveSession({ tokenHash, csrfTokenHash, role, createdAt, expiresAt })`、`findSession(tokenHash, now?)`、`deleteSession(tokenHash)`、`prune(now?)`；认证注入该仓储，未过期会话在同一数据库与 `SESSION_SECRET` 下跨进程重启保持有效。读取在到期边界删除记录并返回 `null`，启动与定时维护同样清理过期记录；退出登录删除持久化记录。
 
-业务时间使用 UTC ISO 8601 文本，会话创建和过期时间使用毫秒时间戳。会话仅存储令牌和 CSRF 令牌的 SHA-256 小写十六进制摘要。审计动作限定为 `inquiry_status_changed` 和 `inquiry_deleted`，JSON `payload` 仅允许枚举状态字段 `fromStatus`、`toStatus`；`inquiry_id` 不设外键，以便删除预约后保留不含个人信息正文的审计记录。
+业务时间使用 UTC ISO 8601 文本，会话创建和过期时间使用毫秒时间戳。会话令牌查询键为 `HMAC-SHA256(sessionSecret, rawToken)` 的小写十六进制摘要；CSRF 令牌同样保存带密钥摘要。原始会话令牌仅通过签名 Cookie 传递，保留 HttpOnly、SameSite=Strict、Path=/、Max-Age 及配置的 Secure 属性。审计动作限定为 `inquiry_status_changed` 和 `inquiry_deleted`，JSON `payload` 仅允许枚举状态字段 `fromStatus`、`toStatus`；`inquiry_id` 不设外键，以便删除预约后保留不含个人信息正文的审计记录。
+
+每个请求由应用生成唯一请求 ID，通过 `X-Request-Id` 返回；失败统一为 `{ error: { code, message, requestId } }`，保留既有 HTTP 状态码，校验失败使用规范化校验码。意外内部错误只返回通用中文消息，请求处理器的错误日志仅记录请求 ID 和内部错误类别，不输出请求正文、URL、SQL、路径、凭据或异常栈。前端读取 `error.message`，请求在 15 秒后超时并给出网络或超时反馈；预约和登录表单在请求期间阻止重复提交。
 
 主要表为：
 

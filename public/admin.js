@@ -5,14 +5,28 @@ let inquiries = [];
 let csrfToken = '';
 
 async function request(url, options = {}) {
-  const response = await fetch(url, options);
-  const body = await response.json();
-  if (!response.ok) {
-    const error = new Error(body.error || '暂时无法加载数据。');
-    error.status = response.status;
-    throw error;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    let response;
+    let body;
+    try {
+      response = await fetch(url, { ...options, signal: controller.signal });
+      body = await response.json();
+    } catch {
+      throw new Error(controller.signal.aborted
+        ? '请求超时，请刷新确认操作结果后重试。'
+        : '网络连接异常，请检查网络后重试。');
+    }
+    if (!response.ok) {
+      const error = new Error(body.error?.message || '暂时无法加载数据。');
+      error.status = response.status;
+      throw error;
+    }
+    return body;
+  } finally {
+    clearTimeout(timeout);
   }
-  return body;
 }
 
 function showLogin(message = '') {
@@ -105,20 +119,32 @@ async function loadDashboard() {
 
 document.querySelector('#login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const form = event.currentTarget;
+  if (form.dataset.submitting === 'true') return;
+  const fields = Object.fromEntries(new FormData(form));
+  const button = form.querySelector('[type="submit"]');
+  form.dataset.submitting = 'true';
+  button.disabled = true;
   loginStatus.textContent = '登录中…';
   loginStatus.className = 'form-status';
   try {
-    const session = await request('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
+    const session = await request('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(fields) });
     csrfToken = session.csrfToken;
-    event.currentTarget.reset();
+    form.reset();
     await loadDashboard();
   } catch (error) {
     loginStatus.textContent = error.message;
     loginStatus.className = 'form-status error';
+  } finally {
+    form.dataset.submitting = 'false';
+    button.disabled = false;
   }
 });
 document.querySelector('#logout').addEventListener('click', async () => {
-  try { await request('/api/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } }); } finally { showLogin('已退出。'); }
+  try {
+    await request('/api/logout', { method: 'POST', headers: { 'x-csrf-token': csrfToken } });
+    showLogin('已退出。');
+  } catch (error) { alert(error.message); }
 });
 document.querySelector('#refresh').addEventListener('click', loadDashboard);
 loadDashboard();

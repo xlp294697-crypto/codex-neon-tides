@@ -7,7 +7,7 @@ import { createInquiryRepository } from './repositories/inquiry-repository.mjs';
 import { createAnalyticsRepository } from './repositories/analytics-repository.mjs';
 import { createSessionRepository } from './repositories/session-repository.mjs';
 import { transaction } from './repositories/transaction.mjs';
-import { HttpError } from './http/errors.mjs';
+import { HttpError, safeApiError } from './http/errors.mjs';
 import { createResponseHelpers } from './http/responses.mjs';
 import { createAuth } from './middleware/auth.mjs';
 import { requireCsrf } from './middleware/csrf.mjs';
@@ -124,7 +124,12 @@ export function createApp(config) {
   let sessions;
   let dataHealthy = true;
 
-  const auth = createAuth(config);
+  const auth = createAuth(config, {
+    saveSession: (session) => storageOperation(() => sessions.saveSession(session)),
+    findSession: (tokenHash) => storageOperation(() => sessions.findSession(tokenHash)),
+    deleteSession: (tokenHash) => storageOperation(() => sessions.deleteSession(tokenHash)),
+    prune: () => storageOperation(() => sessions.prune()),
+  });
   const { verifyAdminPassword, newSession, requireAdmin, sessionCookie } = auth;
   const rateLimiter = createRateLimiter(config);
   const { buckets: rateBuckets, getRequestIp, hitRateLimit, clearRateLimit } = rateLimiter;
@@ -253,8 +258,9 @@ export function createApp(config) {
       (req.method === 'GET' || req.method === 'HEAD') &&
       pathname === '/api/health'
     ) {
-      sendJson(req, res, dataHealthy ? 200 : 503, {
-        ok: dataHealthy,
+      if (!dataHealthy) throw new HttpError(503, '服务暂时不可用，请稍后再试。');
+      sendJson(req, res, 200, {
+        ok: true,
         service: 'jiuyue-sports',
         version: '1.0.0',
         time: new Date().toISOString(),
@@ -280,9 +286,9 @@ export function createApp(config) {
       }
       const body = await readJson(req);
       const result = validateEvent(body);
-      if (!result.ok) throw new HttpError(422, result.message);
+      if (!result.ok) throw new HttpError(422, result.message, result.code);
       const accepted = analyticsService.enqueue(result.value);
-      if (!accepted.ok) throw new HttpError(503, accepted.message);
+      if (!accepted.ok) throw new HttpError(503, accepted.message, accepted.code);
       sendJson(req, res, 202, { ok: true });
       return;
     }
@@ -300,7 +306,7 @@ export function createApp(config) {
         return;
       }
       const result = validateInquiry(body);
-      if (!result.ok) throw new HttpError(422, result.message);
+      if (!result.ok) throw new HttpError(422, result.message, result.code);
       if (
         hitRateLimit(rateBuckets.inquiriesFast, ip, 1, 8000) ||
         hitRateLimit(rateBuckets.inquiriesHourly, ip, 8, 3600000)
@@ -317,7 +323,7 @@ export function createApp(config) {
         throw new HttpError(429, '登录失败次数过多，请稍后再试。');
       const body = await readJson(req);
       if (!verifyAdminPassword(getText(body.password, 250)))
-        throw new HttpError(401, '管理员密码错误。');
+        throw new HttpError(401, '管理员密码错误。', 'INVALID_CREDENTIALS');
       clearRateLimit(rateBuckets.login, ip);
       const session = newSession();
       sendJson(
@@ -342,7 +348,7 @@ export function createApp(config) {
     if (req.method === 'POST' && pathname === '/api/logout') {
       const session = requireAdmin(req);
       requireCsrf(req, session);
-      auth.invalidateSession(session.token);
+      auth.invalidateSession(session.tokenHash);
       sendJson(
         req,
         res,
@@ -379,7 +385,7 @@ export function createApp(config) {
       const body = await readJson(req);
       const result = await inquiryService.updateStatus(statusMatch[1], body.status);
       if (!result.ok) {
-        throw new HttpError(result.code === 'INQUIRY_NOT_FOUND' ? 404 : 422, result.message);
+        throw new HttpError(result.code === 'INQUIRY_NOT_FOUND' ? 404 : 422, result.message, result.code);
       }
       sendJson(req, res, 200, { ok: true });
       return;
@@ -388,7 +394,7 @@ export function createApp(config) {
       const session = requireAdmin(req);
       requireCsrf(req, session);
       const result = await inquiryService.remove(statusMatch[1]);
-      if (!result.ok) throw new HttpError(404, result.message);
+      if (!result.ok) throw new HttpError(404, result.message, result.code);
       sendJson(req, res, 200, { ok: true });
       return;
     }
@@ -401,19 +407,15 @@ export function createApp(config) {
   }
 
   async function handleRequest(req, res) {
+    req.requestId = randomUUID();
     try {
       await route(req, res);
     } catch (error) {
-      const status = error instanceof HttpError ? error.status : 500;
-      if (status === 500)
-        console.error(
-          `[${new Date().toISOString()}] ${req.method} ${req.url}:`,
-          error,
-        );
+      const { status, body } = safeApiError(error, req.requestId);
+      if (status >= 500)
+        console.error(JSON.stringify({ requestId: req.requestId, category: body.error.code }));
       if (!res.headersSent)
-        sendJson(req, res, status, {
-          error: status === 500 ? '服务器暂时无法处理请求。' : error.message,
-        });
+        sendJson(req, res, status, body);
       else res.destroy();
     }
   }
@@ -438,9 +440,8 @@ export function createApp(config) {
 
   function cleanupExpiredState() {
     rateLimiter.cleanupExpiredState();
-    auth.cleanupExpiredState();
     try {
-      storageOperation(() => sessions.prune());
+      auth.cleanupExpiredState();
     } catch {
       console.error(`[${new Date().toISOString()}] 过期会话清理失败。`);
     }

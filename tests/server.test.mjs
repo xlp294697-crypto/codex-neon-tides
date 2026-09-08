@@ -296,7 +296,7 @@ test('完整生产接口、安全控制、隐私口径、时区、留存与会�
   await stopServer();
   await startServer();
   result = await jsonRequest('/api/inquiries', { headers: { cookie: firstSession.cookie } });
-  assert.equal(result.response.status, 401, '进程重启后旧内存会话必须失效');
+  assert.equal(result.response.status, 200, '未过期会话必须在进程重启后继续有效');
   const secondSession = await login();
   result = await jsonRequest('/api/inquiries', { headers: { cookie: secondSession.cookie } });
   assert.equal(result.response.status, 200);

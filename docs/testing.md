@@ -23,9 +23,13 @@
 | 快速语法检查 | `npm run check` |
 | 当前自动化测试 | `npm test` |
 | 仓储与 JSON 导入 | `node --test tests/integration/repositories.test.mjs tests/integration/import-json-data.test.mjs` |
+| 会话与错误契约 | `node --test tests/integration/session-persistence.test.mjs tests/integration/error-contract.test.mjs` |
+| 浏览器脚本请求与提交 | `node --test tests/unit/browser-requests.test.mjs` |
 | Pull Request | 格式与静态检查 → 单元 → 集成 → Playwright E2E → Docker 构建 → 镜像安全扫描 |
 | 合并 `main` | 构建 SHA 镜像 → staging 部署/迁移/烟测 → 人工批准 → production 备份、部署、迁移、健康检查与烟测 |
 
 既有失败先归类为基线问题或本次回归，不能通过删除、跳过或弱化测试获得通过。所有 Pull Request 必须通过适用门禁后才能合并。
 
 仓储集成测试使用临时 SQLite 文件验证 API 字段映射、排序、状态和删除审计的原子性、统计批次回滚、留存及到期会话清理。导入测试只使用虚构记录，验证重复导入、数量核对、只读预检、源文件不变、隐私字段过滤及跨表回滚。现有服务接口回归同样直接使用 SQLite 种子与持久化结果。
+
+会话测试启动不同 Node.js 进程访问同一临时数据库，验证 Cookie 重启恢复、到期读取删除、摘要存储及退出后的持续失效。错误契约测试覆盖输入、认证、CSRF、限流、实际 SQLite 触发器写入失败与请求 ID，确保响应及请求错误日志不泄露内部信息。浏览器脚本在最小 DOM 测试环境执行，覆盖错误消息、网络失败、超时、重复提交及异步完成后的表单重置；这不替代 Playwright 真浏览器验证。
