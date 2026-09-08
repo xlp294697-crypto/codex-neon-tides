@@ -52,12 +52,10 @@ export function normalizeVisitorId(value) {
 }
 
 export function readAnalyticsConsent(body, { now = Date.now() } = {}) {
-  if (!consentSchema(body))
-    return null;
+  if (!consentSchema(body)) return null;
   const consentAt = getText(body.analyticsConsentAt, 40);
   const timestamp = Date.parse(consentAt);
-  if (!Number.isFinite(timestamp) || timestamp > now + 86400000)
-    return null;
+  if (!Number.isFinite(timestamp) || timestamp > now + 86400000) return null;
   return {
     analyticsConsentAt: new Date(timestamp).toISOString(),
     analyticsNoticeVersion: ANALYTICS_NOTICE_VERSION,

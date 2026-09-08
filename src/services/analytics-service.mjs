@@ -6,7 +6,10 @@ const EVENT_FLUSH_DELAY_MS = 2000;
 const EVENT_RETRY_DELAY_MS = 5000;
 
 // Repository: insertBatch(events), resolving only after the complete batch persists.
-export function createAnalyticsService(repository, { onWriteFailure = () => undefined } = {}) {
+export function createAnalyticsService(
+  repository,
+  { onWriteFailure = () => undefined } = {},
+) {
   let eventFlushPromise = null;
   const eventBuffer = [];
   let scheduleEventFlushTimer = () => undefined;
@@ -23,8 +26,16 @@ export function createAnalyticsService(repository, { onWriteFailure = () => unde
 
   function enqueue(value) {
     if (eventBuffer.length >= EVENT_BUFFER_LIMIT)
-      return { ok: false, code: 'EVENT_QUEUE_FULL', message: '统计队列繁忙，请稍后再试。' };
-    eventBuffer.push({ id: randomUUID(), createdAt: new Date().toISOString(), ...value });
+      return {
+        ok: false,
+        code: 'EVENT_QUEUE_FULL',
+        message: '统计队列繁忙，请稍后再试。',
+      };
+    eventBuffer.push({
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+      ...value,
+    });
     if (eventBuffer.length >= EVENT_BATCH_SIZE) {
       cancelScheduledEventFlush();
       void flushEventBuffer().catch((error) =>
@@ -82,7 +93,9 @@ export function createAnalyticsService(repository, { onWriteFailure = () => unde
     enqueue,
     flushEventBuffer,
     cancelScheduledEventFlush,
-    get eventBufferLength() { return eventBuffer.length; },
+    get eventBufferLength() {
+      return eventBuffer.length;
+    },
     setEventTimerControls(controls) {
       scheduleEventFlushTimer = controls.schedule;
       cancelEventFlushTimer = controls.cancel;

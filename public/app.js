@@ -11,7 +11,11 @@ let visitorId = '';
 let sectionObserver = null;
 
 function getConsent() {
-  try { return localStorage.getItem(consentKey) || ''; } catch { return ''; }
+  try {
+    return localStorage.getItem(consentKey) || '';
+  } catch {
+    return '';
+  }
 }
 
 function setConsent(value) {
@@ -22,7 +26,11 @@ function setConsent(value) {
 }
 
 function getConsentAt() {
-  try { return localStorage.getItem(consentAtKey) || ''; } catch { return ''; }
+  try {
+    return localStorage.getItem(consentAtKey) || '';
+  } catch {
+    return '';
+  }
 }
 
 function setConsentAt(value) {
@@ -33,7 +41,11 @@ function setConsentAt(value) {
 }
 
 function getConsentVersion() {
-  try { return localStorage.getItem(consentVersionKey) || ''; } catch { return ''; }
+  try {
+    return localStorage.getItem(consentVersionKey) || '';
+  } catch {
+    return '';
+  }
 }
 
 function setConsentVersion(value) {
@@ -44,13 +56,19 @@ function setConsentVersion(value) {
 }
 
 function hasAnalyticsConsent() {
-  return getConsent() === 'yes' && getConsentVersion() === analyticsNoticeVersion && Boolean(getConsentAt());
+  return (
+    getConsent() === 'yes' &&
+    getConsentVersion() === analyticsNoticeVersion &&
+    Boolean(getConsentAt())
+  );
 }
 
 function newVisitorId() {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+  return [...bytes]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 function getVisitorId() {
@@ -68,11 +86,12 @@ function getVisitorId() {
 }
 
 function campaignContext() {
-  const clean = (name, maximum) => (query.get(name) || '')
-    .normalize('NFKC')
-    .replace(/[^\p{L}\p{N}._-]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, maximum);
+  const clean = (name, maximum) =>
+    (query.get(name) || '')
+      .normalize('NFKC')
+      .replace(/[^\p{L}\p{N}._-]+/gu, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, maximum);
   return {
     source: clean('utm_source', 40),
     medium: clean('utm_medium', 40),
@@ -85,7 +104,9 @@ function referrerOrigin() {
   try {
     const parsed = new URL(document.referrer);
     return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : '';
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 
 function eventContext() {
@@ -111,11 +132,14 @@ async function request(url, options = {}) {
       response = await fetch(url, { ...options, signal: controller.signal });
       data = await response.json();
     } catch {
-      throw new Error(controller.signal.aborted
-        ? '请求超时，请稍后重试；预约可能已提交，请勿连续重复提交。'
-        : '网络连接异常，请检查网络后重试。');
+      throw new Error(
+        controller.signal.aborted
+          ? '请求超时，请稍后重试；预约可能已提交，请勿连续重复提交。'
+          : '网络连接异常，请检查网络后重试。',
+      );
     }
-    if (!response.ok) throw new Error(data.error?.message || '提交失败，请稍后再试。');
+    if (!response.ok)
+      throw new Error(data.error?.message || '提交失败，请稍后再试。');
     return data;
   } finally {
     clearTimeout(timeout);
@@ -137,15 +161,21 @@ function startAnalytics() {
   track('page_view');
   if ('IntersectionObserver' in window) {
     const observed = new Set();
-    sectionObserver = new IntersectionObserver((entries) => entries.forEach((entry) => {
-      const section = entry.target.dataset.section;
-      if (entry.isIntersecting && !observed.has(section)) {
-        observed.add(section);
-        track('section_view', { section });
-        sectionObserver.unobserve(entry.target);
-      }
-    }), { threshold: 0.28 });
-    document.querySelectorAll('.observed-section').forEach((section) => sectionObserver.observe(section));
+    sectionObserver = new IntersectionObserver(
+      (entries) =>
+        entries.forEach((entry) => {
+          const section = entry.target.dataset.section;
+          if (entry.isIntersecting && !observed.has(section)) {
+            observed.add(section);
+            track('section_view', { section });
+            sectionObserver.unobserve(entry.target);
+          }
+        }),
+      { threshold: 0.28 },
+    );
+    document
+      .querySelectorAll('.observed-section')
+      .forEach((section) => sectionObserver.observe(section));
   }
 }
 
@@ -158,36 +188,47 @@ function closeConsentSettings() {
   consentPanel.hidden = true;
 }
 
-consentPanel.querySelector('[data-analytics-accept]').addEventListener('click', () => {
-  setConsent('yes');
-  setConsentAt(new Date().toISOString());
-  setConsentVersion(analyticsNoticeVersion);
-  closeConsentSettings();
-  startAnalytics();
-});
-consentPanel.querySelector('[data-analytics-reject]').addEventListener('click', () => {
-  setConsent('no');
-  setConsentAt('');
-  setConsentVersion('');
-  try { localStorage.removeItem(visitorKey); } catch {}
-  visitorId = '';
-  analyticsStarted = false;
-  if (sectionObserver) sectionObserver.disconnect();
-  sectionObserver = null;
-  closeConsentSettings();
-});
+consentPanel
+  .querySelector('[data-analytics-accept]')
+  .addEventListener('click', () => {
+    setConsent('yes');
+    setConsentAt(new Date().toISOString());
+    setConsentVersion(analyticsNoticeVersion);
+    closeConsentSettings();
+    startAnalytics();
+  });
+consentPanel
+  .querySelector('[data-analytics-reject]')
+  .addEventListener('click', () => {
+    setConsent('no');
+    setConsentAt('');
+    setConsentVersion('');
+    try {
+      localStorage.removeItem(visitorKey);
+    } catch {}
+    visitorId = '';
+    analyticsStarted = false;
+    if (sectionObserver) sectionObserver.disconnect();
+    sectionObserver = null;
+    closeConsentSettings();
+  });
 analyticsSettings.addEventListener('click', openConsentSettings);
 const savedConsent = getConsent();
-if (!['yes', 'no'].includes(savedConsent) || (savedConsent === 'yes' && !hasAnalyticsConsent())) {
+if (
+  !['yes', 'no'].includes(savedConsent) ||
+  (savedConsent === 'yes' && !hasAnalyticsConsent())
+) {
   setConsent('');
   setConsentAt('');
   setConsentVersion('');
   openConsentSettings();
 } else startAnalytics();
 
-document.querySelectorAll('[data-assessment-source]').forEach((link) => link.addEventListener('click', () => {
-  track('assessment_click', { section: link.dataset.assessmentSource });
-}));
+document.querySelectorAll('[data-assessment-source]').forEach((link) =>
+  link.addEventListener('click', () => {
+    track('assessment_click', { section: link.dataset.assessmentSource });
+  }),
+);
 
 const galleryItems = [...document.querySelectorAll('[data-gallery-item]')];
 const dialog = document.querySelector('#media-dialog');
@@ -205,7 +246,12 @@ function showItem(index, shouldTrack = true) {
   dialogImage.alt = image.alt;
   dialogTitle.textContent = item.dataset.targetLabel;
   dialogCount.textContent = `${activeIndex + 1} / ${galleryItems.length}`;
-  if (shouldTrack) track('image_open', { section: item.dataset.section, targetId: item.dataset.targetId, targetLabel: item.dataset.targetLabel });
+  if (shouldTrack)
+    track('image_open', {
+      section: item.dataset.section,
+      targetId: item.dataset.targetId,
+      targetLabel: item.dataset.targetLabel,
+    });
 }
 
 function openDialog(index) {
@@ -223,10 +269,18 @@ function closeDialog() {
   if (returnFocus) returnFocus.focus();
 }
 
-galleryItems.forEach((item, index) => item.addEventListener('click', () => openDialog(index)));
-dialog.querySelectorAll('[data-dialog-close]').forEach((button) => button.addEventListener('click', closeDialog));
-dialog.querySelector('[data-dialog-prev]').addEventListener('click', () => showItem(activeIndex - 1));
-dialog.querySelector('[data-dialog-next]').addEventListener('click', () => showItem(activeIndex + 1));
+galleryItems.forEach((item, index) =>
+  item.addEventListener('click', () => openDialog(index)),
+);
+dialog
+  .querySelectorAll('[data-dialog-close]')
+  .forEach((button) => button.addEventListener('click', closeDialog));
+dialog
+  .querySelector('[data-dialog-prev]')
+  .addEventListener('click', () => showItem(activeIndex - 1));
+dialog
+  .querySelector('[data-dialog-next]')
+  .addEventListener('click', () => showItem(activeIndex + 1));
 document.addEventListener('keydown', (event) => {
   if (dialog.hidden) return;
   if (event.key === 'Escape') closeDialog();
@@ -234,48 +288,54 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowRight') showItem(activeIndex + 1);
 });
 
-document.querySelector('#booking-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  if (form.dataset.submitting === 'true') return;
-  const fields = Object.fromEntries(new FormData(form));
-  const button = form.querySelector('[type="submit"]');
-  form.dataset.submitting = 'true';
-  button.disabled = true;
-  const status = document.querySelector('#status');
-  status.textContent = '正在提交…';
-  status.className = 'form-status';
-  try {
-    const analyticsAllowed = hasAnalyticsConsent();
-    await request('/api/inquiries', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        parentName: fields.parentName,
-        phone: fields.phone,
-        grade: fields.grade,
-        course: fields.course,
-        concern: fields.concern,
-        preferredTime: fields.preferredTime,
-        website: fields.website,
-        privacyConsent: fields.privacyConsent === 'yes',
-        sourcePage: analyticsAllowed ? location.pathname : '',
-        sourceSection: analyticsAllowed ? (location.hash.replace('#', '') || 'assessment') : '',
-        referrer: analyticsAllowed ? referrerOrigin() : '',
-        utm: analyticsAllowed ? campaignContext() : {},
-        analyticsConsent: analyticsAllowed,
-        analyticsNoticeVersion: analyticsAllowed ? analyticsNoticeVersion : '',
-        analyticsConsentAt: analyticsAllowed ? getConsentAt() : '',
-      }),
-    });
-    void track('booking_success', { section: 'assessment' });
-    form.reset();
-    status.textContent = '预约已提交，我们会尽快与您电话联系。';
-  } catch (error) {
-    status.textContent = error.message;
-    status.className = 'form-status error';
-  } finally {
-    form.dataset.submitting = 'false';
-    button.disabled = false;
-  }
-});
+document
+  .querySelector('#booking-form')
+  .addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (form.dataset.submitting === 'true') return;
+    const fields = Object.fromEntries(new FormData(form));
+    const button = form.querySelector('[type="submit"]');
+    form.dataset.submitting = 'true';
+    button.disabled = true;
+    const status = document.querySelector('#status');
+    status.textContent = '正在提交…';
+    status.className = 'form-status';
+    try {
+      const analyticsAllowed = hasAnalyticsConsent();
+      await request('/api/inquiries', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          parentName: fields.parentName,
+          phone: fields.phone,
+          grade: fields.grade,
+          course: fields.course,
+          concern: fields.concern,
+          preferredTime: fields.preferredTime,
+          website: fields.website,
+          privacyConsent: fields.privacyConsent === 'yes',
+          sourcePage: analyticsAllowed ? location.pathname : '',
+          sourceSection: analyticsAllowed
+            ? location.hash.replace('#', '') || 'assessment'
+            : '',
+          referrer: analyticsAllowed ? referrerOrigin() : '',
+          utm: analyticsAllowed ? campaignContext() : {},
+          analyticsConsent: analyticsAllowed,
+          analyticsNoticeVersion: analyticsAllowed
+            ? analyticsNoticeVersion
+            : '',
+          analyticsConsentAt: analyticsAllowed ? getConsentAt() : '',
+        }),
+      });
+      void track('booking_success', { section: 'assessment' });
+      form.reset();
+      status.textContent = '预约已提交，我们会尽快与您电话联系。';
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = 'form-status error';
+    } finally {
+      form.dataset.submitting = 'false';
+      button.disabled = false;
+    }
+  });

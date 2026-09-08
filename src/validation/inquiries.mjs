@@ -1,4 +1,10 @@
-import { ajv, getText, getSource, normalizeReferrer, readAnalyticsConsent } from './common.mjs';
+import {
+  ajv,
+  getText,
+  getSource,
+  normalizeReferrer,
+  readAnalyticsConsent,
+} from './common.mjs';
 
 // Normalize using the existing public contract before applying the request schema.
 // Coercion, truncation and unknown-field handling therefore remain unchanged.
@@ -35,15 +41,28 @@ export function validateInquiry(input, options) {
     sourcePage: consent ? getText(body.sourcePage, 160) : '',
     sourceSection: consent ? getText(body.sourceSection, 80) : '',
     referrer: consent ? normalizeReferrer(body.referrer) : '',
-    privacyConsent: body.privacyConsent === true || body.privacyConsent === 'yes',
+    privacyConsent:
+      body.privacyConsent === true || body.privacyConsent === 'yes',
     source: consent ? getSource(body) : '',
     analyticsAttributed: Boolean(consent),
   };
   if (!inquirySchema(value)) {
-    if (inquirySchema.errors.some((error) => error.instancePath !== '/privacyConsent')) {
-      return { ok: false, code: 'INVALID_INQUIRY', message: '请填写家长姓名、有效电话、孩子年级和意向课程。' };
+    if (
+      inquirySchema.errors.some(
+        (error) => error.instancePath !== '/privacyConsent',
+      )
+    ) {
+      return {
+        ok: false,
+        code: 'INVALID_INQUIRY',
+        message: '请填写家长姓名、有效电话、孩子年级和意向课程。',
+      };
     }
-    return { ok: false, code: 'PRIVACY_CONSENT_REQUIRED', message: '请先确认预约信息处理告知。' };
+    return {
+      ok: false,
+      code: 'PRIVACY_CONSENT_REQUIRED',
+      message: '请先确认预约信息处理告知。',
+    };
   }
   return { ok: true, value };
 }

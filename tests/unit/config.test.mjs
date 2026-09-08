@@ -10,8 +10,14 @@ const valid = {
 };
 
 test('DATA_PATH addresses SQLite and defaults to data/site.db', () => {
-  assert.equal(loadConfig(valid, process.cwd()).dataPath, path.join(process.cwd(), 'data', 'site.db'));
-  assert.equal(loadConfig({ ...valid, DATA_PATH: './custom.db' }, process.cwd()).dataPath, path.resolve('custom.db'));
+  assert.equal(
+    loadConfig(valid, process.cwd()).dataPath,
+    path.join(process.cwd(), 'data', 'site.db'),
+  );
+  assert.equal(
+    loadConfig({ ...valid, DATA_PATH: './custom.db' }, process.cwd()).dataPath,
+    path.resolve('custom.db'),
+  );
 });
 
 test('loadConfig rejects missing administrator credentials', () => {

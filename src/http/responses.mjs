@@ -76,7 +76,11 @@ export function createResponseHelpers({ enableHsts, maxBodyBytes }) {
         throw new Error('not-an-object');
       return parsed;
     } catch {
-      throw new HttpError(400, '请求内容必须是有效的 JSON 对象。', 'INVALID_JSON');
+      throw new HttpError(
+        400,
+        '请求内容必须是有效的 JSON 对象。',
+        'INVALID_JSON',
+      );
     }
   }
 

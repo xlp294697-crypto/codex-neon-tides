@@ -125,14 +125,22 @@ export function createApp(config) {
   let dataHealthy = true;
 
   const auth = createAuth(config, {
-    saveSession: (session) => storageOperation(() => sessions.saveSession(session)),
-    findSession: (tokenHash) => storageOperation(() => sessions.findSession(tokenHash)),
-    deleteSession: (tokenHash) => storageOperation(() => sessions.deleteSession(tokenHash)),
+    saveSession: (session) =>
+      storageOperation(() => sessions.saveSession(session)),
+    findSession: (tokenHash) =>
+      storageOperation(() => sessions.findSession(tokenHash)),
+    deleteSession: (tokenHash) =>
+      storageOperation(() => sessions.deleteSession(tokenHash)),
     prune: () => storageOperation(() => sessions.prune()),
   });
   const { verifyAdminPassword, newSession, requireAdmin, sessionCookie } = auth;
   const rateLimiter = createRateLimiter(config);
-  const { buckets: rateBuckets, getRequestIp, hitRateLimit, clearRateLimit } = rateLimiter;
+  const {
+    buckets: rateBuckets,
+    getRequestIp,
+    hitRateLimit,
+    clearRateLimit,
+  } = rateLimiter;
 
   function storageOperation(operation) {
     try {
@@ -147,27 +155,43 @@ export function createApp(config) {
 
   function pruneData() {
     events.prune({
-      cutoff: new Date(Date.now() - EVENT_RETENTION_DAYS * 86400000).toISOString(),
+      cutoff: new Date(
+        Date.now() - EVENT_RETENTION_DAYS * 86400000,
+      ).toISOString(),
       maxRecords: MAX_EVENT_RECORDS,
     });
     inquiries.prune(MAX_INQUIRY_RECORDS);
   }
 
   const inquiryService = createInquiryService({
-    create: (inquiry) => storageOperation(() => transaction(db, () => {
-      inquiries.create(inquiry);
-      pruneData();
-    })),
+    create: (inquiry) =>
+      storageOperation(() =>
+        transaction(db, () => {
+          inquiries.create(inquiry);
+          pruneData();
+        }),
+      ),
     findAll: () => storageOperation(() => inquiries.findAll()),
-    updateStatus: (...args) => storageOperation(() => inquiries.updateStatus(...args)),
+    updateStatus: (...args) =>
+      storageOperation(() => inquiries.updateStatus(...args)),
     remove: (id) => storageOperation(() => inquiries.remove(id)),
   });
-  const analyticsService = createAnalyticsService({
-    insertBatch: (batch) => storageOperation(() => transaction(db, () => {
-      events.insertBatch(batch);
-      pruneData();
-    })),
-  }, { onWriteFailure: () => { dataHealthy = false; } });
+  const analyticsService = createAnalyticsService(
+    {
+      insertBatch: (batch) =>
+        storageOperation(() =>
+          transaction(db, () => {
+            events.insertBatch(batch);
+            pruneData();
+          }),
+        ),
+    },
+    {
+      onWriteFailure: () => {
+        dataHealthy = false;
+      },
+    },
+  );
   const { flushEventBuffer, cancelScheduledEventFlush } = analyticsService;
 
   function escapeHtml(value) {
@@ -258,7 +282,8 @@ export function createApp(config) {
       (req.method === 'GET' || req.method === 'HEAD') &&
       pathname === '/api/health'
     ) {
-      if (!dataHealthy) throw new HttpError(503, '服务暂时不可用，请稍后再试。');
+      if (!dataHealthy)
+        throw new HttpError(503, '服务暂时不可用，请稍后再试。');
       sendJson(req, res, 200, {
         ok: true,
         service: 'jiuyue-sports',
@@ -288,7 +313,8 @@ export function createApp(config) {
       const result = validateEvent(body);
       if (!result.ok) throw new HttpError(422, result.message, result.code);
       const accepted = analyticsService.enqueue(result.value);
-      if (!accepted.ok) throw new HttpError(503, accepted.message, accepted.code);
+      if (!accepted.ok)
+        throw new HttpError(503, accepted.message, accepted.code);
       sendJson(req, res, 202, { ok: true });
       return;
     }
@@ -365,7 +391,12 @@ export function createApp(config) {
     ) {
       requireAdmin(req);
       await flushEventBuffer({ drain: true });
-      sendJson(req, res, 200, createDashboard(await readData(), REPORT_TIME_ZONE));
+      sendJson(
+        req,
+        res,
+        200,
+        createDashboard(await readData(), REPORT_TIME_ZONE),
+      );
       return;
     }
 
@@ -383,9 +414,16 @@ export function createApp(config) {
       const session = requireAdmin(req);
       requireCsrf(req, session);
       const body = await readJson(req);
-      const result = await inquiryService.updateStatus(statusMatch[1], body.status);
+      const result = await inquiryService.updateStatus(
+        statusMatch[1],
+        body.status,
+      );
       if (!result.ok) {
-        throw new HttpError(result.code === 'INQUIRY_NOT_FOUND' ? 404 : 422, result.message, result.code);
+        throw new HttpError(
+          result.code === 'INQUIRY_NOT_FOUND' ? 404 : 422,
+          result.message,
+          result.code,
+        );
       }
       sendJson(req, res, 200, { ok: true });
       return;
@@ -413,9 +451,13 @@ export function createApp(config) {
     } catch (error) {
       const { status, body } = safeApiError(error, req.requestId);
       if (status >= 500)
-        console.error(JSON.stringify({ requestId: req.requestId, category: body.error.code }));
-      if (!res.headersSent)
-        sendJson(req, res, status, body);
+        console.error(
+          JSON.stringify({
+            requestId: req.requestId,
+            category: body.error.code,
+          }),
+        );
+      if (!res.headersSent) sendJson(req, res, status, body);
       else res.destroy();
     }
   }
@@ -462,7 +504,9 @@ export function createApp(config) {
   Object.defineProperty(handleRequest, 'lifecycle', {
     value: Object.freeze({
       initialize,
-      closeDatabase() { if (db?.isOpen) closeDatabase(db); },
+      closeDatabase() {
+        if (db?.isOpen) closeDatabase(db);
+      },
       cleanupExpiredState,
       runDataMaintenance,
       flushEventBuffer,

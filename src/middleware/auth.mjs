@@ -1,4 +1,9 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import {
+  createHmac,
+  randomBytes,
+  scryptSync,
+  timingSafeEqual,
+} from 'node:crypto';
 import { HttpError } from '../http/errors.mjs';
 
 export function safeEqual(left, right) {
@@ -10,8 +15,10 @@ export function safeEqual(left, right) {
 
 export function createAuth(config, sessionRepository) {
   const {
-    adminPassword: ADMIN_PASSWORD, adminPasswordHash: ADMIN_PASSWORD_HASH,
-    sessionSecret: SESSION_SECRET, sessionHours: SESSION_HOURS,
+    adminPassword: ADMIN_PASSWORD,
+    adminPasswordHash: ADMIN_PASSWORD_HASH,
+    sessionSecret: SESSION_SECRET,
+    sessionHours: SESSION_HOURS,
     cookieSecure: COOKIE_SECURE,
   } = config;
 
@@ -113,5 +120,13 @@ export function createAuth(config, sessionRepository) {
     sessionRepository.prune();
   }
 
-  return { verifyAdminPassword, newSession, readSession, requireAdmin, sessionCookie, invalidateSession, cleanupExpiredState };
+  return {
+    verifyAdminPassword,
+    newSession,
+    readSession,
+    requireAdmin,
+    sessionCookie,
+    invalidateSession,
+    cleanupExpiredState,
+  };
 }

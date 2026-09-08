@@ -11,33 +11,67 @@ function auth(t) {
   const db = openDatabase(':memory:');
   migrate(db);
   t.after(() => db.close());
-  return createAuth({
-    adminPassword: 'synthetic-test-only', adminPasswordHash: '',
-    sessionSecret: 'synthetic-session-signing-key-not-a-real-secret',
-    sessionHours: 1, cookieSecure: true,
-  }, createSessionRepository(db));
+  return createAuth(
+    {
+      adminPassword: 'synthetic-test-only',
+      adminPasswordHash: '',
+      sessionSecret: 'synthetic-session-signing-key-not-a-real-secret',
+      sessionHours: 1,
+      cookieSecure: true,
+    },
+    createSessionRepository(db),
+  );
 }
 
 test('signed sessions enforce CSRF binding, expiry, revocation and cookie flags', (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 });
   const security = auth(t);
   const session = security.newSession();
-  const req = { headers: { cookie: `other=x; jy_admin=${session.cookie}`, 'x-csrf-token': session.csrfToken } };
+  const req = {
+    headers: {
+      cookie: `other=x; jy_admin=${session.cookie}`,
+      'x-csrf-token': session.csrfToken,
+    },
+  };
   assert.equal(security.verifyAdminPassword('wrong'), false);
   assert.equal(security.verifyAdminPassword('synthetic-test-only'), true);
   assert.equal(Boolean(security.requireAdmin(req)), true);
   assert.doesNotThrow(() => requireCsrf(req, session));
-  assert.throws(() => requireCsrf({ headers: { 'x-csrf-token': auth(t).newSession().csrfToken } }, session), { status: 403 });
+  assert.throws(
+    () =>
+      requireCsrf(
+        { headers: { 'x-csrf-token': auth(t).newSession().csrfToken } },
+        session,
+      ),
+    { status: 403 },
+  );
   const cookie = security.sessionCookie(session.cookie);
-  for (const flag of ['HttpOnly', 'SameSite=Strict', 'Path=/', 'Max-Age=3600', 'Secure']) assert.equal(cookie.includes(flag), true);
+  for (const flag of [
+    'HttpOnly',
+    'SameSite=Strict',
+    'Path=/',
+    'Max-Age=3600',
+    'Secure',
+  ])
+    assert.equal(cookie.includes(flag), true);
   assert.equal(security.sessionCookie('', 0).includes('Max-Age=0'), true);
-  assert.equal(security.readSession({ headers: { cookie: `jy_admin=${session.cookie}x` } }), null);
+  assert.equal(
+    security.readSession({
+      headers: { cookie: `jy_admin=${session.cookie}x` },
+    }),
+    null,
+  );
   assert.equal(auth(t).readSession(req), null);
   security.invalidateSession(session.tokenHash);
   assert.throws(() => security.requireAdmin(req), { status: 401 });
   const expiring = security.newSession();
   t.mock.timers.tick(3600000);
-  assert.equal(security.readSession({ headers: { cookie: `jy_admin=${expiring.cookie}` } }), null);
+  assert.equal(
+    security.readSession({
+      headers: { cookie: `jy_admin=${expiring.cookie}` },
+    }),
+    null,
+  );
 });
 
 test('rate limits allow the exact quota, reset on the window edge and isolate keys and app instances', (t) => {
@@ -56,7 +90,13 @@ test('rate limits allow the exact quota, reset on the window edge and isolate ke
   t.mock.timers.tick(500);
   limiter.cleanupExpiredState();
   assert.equal(bucket.size, 0);
-  const req = { headers: { 'x-forwarded-for': ' spoofed, proxy ' }, socket: { remoteAddress: 'socket-ip' } };
+  const req = {
+    headers: { 'x-forwarded-for': ' spoofed, proxy ' },
+    socket: { remoteAddress: 'socket-ip' },
+  };
   assert.equal(limiter.getRequestIp(req), 'socket-ip');
-  assert.equal(createRateLimiter({ trustProxy: true }).getRequestIp(req), 'spoofed');
+  assert.equal(
+    createRateLimiter({ trustProxy: true }).getRequestIp(req),
+    'spoofed',
+  );
 });

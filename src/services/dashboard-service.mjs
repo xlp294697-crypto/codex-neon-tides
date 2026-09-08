@@ -3,7 +3,10 @@ import { normalizeVisitorId } from '../validation/common.mjs';
 export function createDashboard(data, timeZone, now = Date.now()) {
   const REPORT_TIME_ZONE = timeZone;
   const REPORT_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
-    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
   });
 
   function reportDateKey(value) {

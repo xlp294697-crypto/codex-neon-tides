@@ -45,5 +45,11 @@ export function createRateLimiter(config) {
     }
   }
 
-  return { buckets: rateBuckets, getRequestIp, hitRateLimit, clearRateLimit, cleanupExpiredState };
+  return {
+    buckets: rateBuckets,
+    getRequestIp,
+    hitRateLimit,
+    clearRateLimit,
+    cleanupExpiredState,
+  };
 }
