@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
       - run: docker build -t jiuyue-sports:ci .
       - run: docker save --output "${RUNNER_TEMP}/jiuyue-sports.tar" jiuyue-sports:ci
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: container-${{ github.sha }}
           path: ${{ runner.temp }}/jiuyue-sports.tar
@@ -115,7 +115,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: container-${{ github.sha }}
           path: ${{ runner.temp }}/container
@@ -144,13 +144,13 @@ jobs:
           TRIVY_IGNOREFILE: /dev/null
       - name: Upload SARIF even when vulnerabilities fail the scan
         if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container
       - name: Preserve the scan report
         if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trivy-sarif-${{ github.sha }}
           path: trivy-results.sarif
