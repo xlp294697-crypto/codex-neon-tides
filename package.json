@@ -10,10 +10,23 @@
   "scripts": {
     "start": "node server.mjs",
     "check": "node --check server.mjs && node --check src/config.mjs && node --check src/http/errors.mjs && node --check src/http/responses.mjs && node --check src/middleware/auth.mjs && node --check src/middleware/csrf.mjs && node --check src/middleware/rate-limit.mjs && node --check src/validation/common.mjs && node --check src/validation/inquiries.mjs && node --check src/validation/events.mjs && node --check src/services/dashboard-service.mjs && node --check src/services/inquiry-service.mjs && node --check src/services/analytics-service.mjs && node --check src/app.mjs && node --check src/server.mjs && node --check public/app.js && node --check public/admin.js",
-    "test": "node --test",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs tests/content.test.mjs tests/package.test.mjs tests/server.test.mjs",
+    "test:e2e": "playwright test",
     "test:migrations": "node --test tests/integration/migrations.test.mjs"
   },
   "dependencies": {
     "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.6"
   }
 }

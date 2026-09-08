@@ -1,0 +1,20 @@
+node_modules/
+.superpowers/
+.worktrees/
+data/
+backups/
+logs/
+reports/
+*-report/
+test-results/
+coverage/
+.cache/
+.codex-log/
+package-lock.json
+# Staged adoption: maintain code/config now; leave legacy static layout and prose intact.
+**/*.md
+public/*.html
+public/*.css
+media-manifest.json
+# Applied migration bytes are immutable and checksum verified.
+src/db/migrations/

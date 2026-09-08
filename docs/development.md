@@ -10,8 +10,12 @@
 
 ```bash
 npm install
+npm run format:check
+npm run lint
 npm run check
 npm test
+npx playwright install chromium
+npm run test:e2e
 npm run test:migrations
 npm start
 ```

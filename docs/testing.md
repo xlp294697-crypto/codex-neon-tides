@@ -18,17 +18,27 @@
 
 ## 命令矩阵与质量门禁
 
-| 场景 | 命令或检查 |
-| --- | --- |
-| 快速语法检查 | `npm run check` |
-| 当前自动化测试 | `npm test` |
-| 仓储与 JSON 导入 | `node --test tests/integration/repositories.test.mjs tests/integration/import-json-data.test.mjs` |
-| 会话与错误契约 | `node --test tests/integration/session-persistence.test.mjs tests/integration/error-contract.test.mjs` |
-| 浏览器脚本请求与提交 | `node --test tests/unit/browser-requests.test.mjs` |
-| Pull Request | 格式与静态检查 → 单元 → 集成 → Playwright E2E → Docker 构建 → 镜像安全扫描 |
-| 合并 `main` | 构建 SHA 镜像 → staging 部署/迁移/烟测 → 人工批准 → production 备份、部署、迁移、健康检查与烟测 |
+| 场景                         | 命令或检查                                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 快速语法检查                 | `npm run check`                                                                                        |
+| 格式与静态检查               | `npm run format:check`、`npm run lint`                                                                 |
+| 单元测试                     | `npm run test:unit`                                                                                    |
+| 集成与交付回归               | `npm run test:integration`                                                                             |
+| 单元和集成测试（不发现 E2E） | `npm test`                                                                                             |
+| Chromium 桌面和移动浏览器    | `npm run test:e2e`                                                                                     |
+| 仓储与 JSON 导入             | `node --test tests/integration/repositories.test.mjs tests/integration/import-json-data.test.mjs`      |
+| 会话与错误契约               | `node --test tests/integration/session-persistence.test.mjs tests/integration/error-contract.test.mjs` |
+| 浏览器脚本请求与提交         | `node --test tests/unit/browser-requests.test.mjs`                                                     |
+| Pull Request                 | 格式与静态检查 → 单元 → 集成 → Playwright E2E → Docker 构建 → 镜像安全扫描                             |
+| 合并 `main`                  | 构建 SHA 镜像 → staging 部署/迁移/烟测 → 人工批准 → production 备份、部署、迁移、健康检查与烟测        |
 
 既有失败先归类为基线问题或本次回归，不能通过删除、跳过或弱化测试获得通过。所有 Pull Request 必须通过适用门禁后才能合并。
+
+首次运行浏览器测试先执行 `npm ci` 和 `npx playwright install chromium`；Linux CI 可用 `npx playwright install --with-deps chromium` 安装系统依赖。完整本地门禁为 `npm run format:check && npm run lint && npm run check && npm test && npm run test:e2e`。格式化分阶段采用：`npm run format` 与 `format:check` 当前覆盖维护中的 JS/MJS 和工具配置文件；既有静态 HTML/CSS、Markdown 长文、媒体清单、已应用 SQL 迁移、运行时数据与生成报告排除在外，避免格式变更掩盖行为变更。
+
+Playwright 的每个测试通过真实 `createApp` 启动仅监听回环地址的临时端口，创建和清理独立临时 SQLite 数据库；不读取 shell 中的 `DATA_PATH`、`.env` 或已有服务。桌面 Chromium 与 Pixel 7 移动视口运行相同关键流程，后台额外重启应用并重新读取会话、预约状态和删除结果。自动浏览器检查捕获页面异常、控制台错误、失败请求及所有意外 HTTP 错误（包括资源 404）；只有用例明确声明并验证次数的 401、422 响应允许出现。
+
+`playwright-report/` 和 `test-results/` 保存本地诊断与官网/媒体截图并被 Git 忽略。自动 trace、视频和失败截图关闭，避免表单、凭据或会话进入诊断；主动截图只在公开页面且尚未填写预约时生成。交付包检查排除本机依赖和这些生成诊断目录，同时继续扫描实际源码、部署文件和静态资源。
 
 仓储集成测试使用临时 SQLite 文件验证 API 字段映射、排序、状态和删除审计的原子性、统计批次回滚、留存及到期会话清理。导入测试只使用虚构记录，验证重复导入、数量核对、只读预检、源文件不变、隐私字段过滤及跨表回滚。现有服务接口回归同样直接使用 SQLite 种子与持久化结果。
 
