@@ -42,9 +42,9 @@ async function availablePort() {
   });
 }
 
-async function startServer(environmentOverrides = {}) {
+async function startServer(environmentOverrides = {}, entrypoint = 'server.mjs') {
   childOutput = '';
-  child = spawn(process.execPath, ['server.mjs'], {
+  child = spawn(process.execPath, [entrypoint], {
     cwd: root,
     env: {
       ...process.env,
@@ -359,4 +359,14 @@ test('完整生产接口、安全控制、隐私口径、时区、留存与会�
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: hashPassword }),
   });
   assert.equal(result.response.status, 200, '初始化工具生成的 scrypt 哈希必须可用于登录');
+});
+
+test('src process entry point serves the same secured health response', async () => {
+  await stopServer();
+  await startServer({}, 'src/server.mjs');
+
+  const result = await jsonRequest('/api/health');
+  assert.equal(result.response.status, 200);
+  assert.equal(result.body.service, 'jiuyue-sports');
+  assert.equal(result.response.headers.get('x-content-type-options'), 'nosniff');
 });
