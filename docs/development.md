@@ -2,7 +2,7 @@
 
 ## 前提与初始化
 
-数据库模块使用 Node.js 24 内置 `node:sqlite`，本地开发和测试要求 Node.js 24 或更高版本；后续部署任务将同步 CI 与容器的 Node.js 主版本。安装依赖后使用安全可提交的 `.env.example` 初始化本地配置，绝不提交 `.env`、数据库、备份、日志或真实预约数据。
+数据库模块使用 Node.js 24 内置 `node:sqlite`，本地开发和测试要求 Node.js 24 或更高版本；CI 与容器均使用 Node.js 24。安装依赖后使用安全可提交的 `.env.example` 初始化本地配置，绝不提交 `.env`、数据库、备份、日志或真实预约数据。
 
 本地开发的目标运行方式是 Docker Compose 加独立 SQLite 数据库。后端使用 `node --watch` 自动重启；前端继续直接加载 `public/` 中的原生静态文件，不引入前端打包链。具体用户部署和平台命令见 [README](../README.md)。
 

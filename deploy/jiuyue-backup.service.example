@@ -1,5 +1,5 @@
 [Unit]
-Description=Backup Jiuyue Sports website data
+Description=Create and verify Jiuyue Sports SQLite recovery point
 
 [Service]
 Type=oneshot
@@ -7,7 +7,8 @@ User=jiuyue
 Group=jiuyue
 WorkingDirectory=/opt/jiuyue-sports
 Environment=BACKUP_RETENTION_DAYS=90
-ExecStart=/bin/sh /opt/jiuyue-sports/tools/backup-data.sh
+ExecStart=/usr/bin/node /opt/jiuyue-sports/tools/backup-sqlite.mjs --database /opt/jiuyue-sports/data/site.db --directory /opt/jiuyue-sports/backups --retention-days 90
+TimeoutStartSec=30min
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -16,5 +17,5 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadOnlyPaths=/opt/jiuyue-sports/data
-ReadWritePaths=/opt/jiuyue-sports/backups
+# SQLite read-only WAL readers may need to create/update WAL shared memory.
+ReadWritePaths=/opt/jiuyue-sports/data /opt/jiuyue-sports/backups

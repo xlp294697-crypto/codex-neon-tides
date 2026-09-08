@@ -20,6 +20,8 @@ COPY package.json package-lock.json server.mjs media-manifest.json ./
 COPY src ./src
 COPY public ./public
 COPY deploy/healthcheck.mjs ./deploy/healthcheck.mjs
+COPY tools/sqlite-operations.mjs tools/backup-sqlite.mjs tools/verify-backup.mjs tools/restore-sqlite.mjs tools/import-json-data.mjs ./tools/
+COPY deploy/monitor-health.mjs ./deploy/monitor-health.mjs
 RUN mkdir -p /app/data && chown node:node /app/data
 
 ENV NODE_ENV=production \

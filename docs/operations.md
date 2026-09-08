@@ -82,14 +82,64 @@ staging 成功后，production 作业等待 GitHub `production` Environment 的 
 
 ## 备份与恢复
 
-当前仓储已切换到 SQLite。旧 JSON 备份/恢复脚本尚待后续运维任务替换，不能用于 `site.db`；不得用旧 JSON 文件覆盖 SQLite。正式切换仍需完成 SQLite 备份恢复验证。
+SQLite 唯一日常恢复入口是下列 Node.js 24+ 工具。README 中旧 `backup-data.*`、`backup-docker-data.sh` 和旧恢复脚本仅适用于旧 JSON 交付，禁止用于 `site.db`。新工具已包含在生产镜像中，也可由主机上的对应版本代码运行：
 
-- 每日执行 SQLite 在线备份并生成 SHA-256；至少一份复制到服务器外受控存储。
-- 自动验证备份完整性，每月进行实际恢复演练。
-- 恢复前确认备份、目标和服务状态；恢复后执行健康检查、数据核对和必要的删除清单。
-- 备份、恢复与现有交付脚本的操作细节见 [README](../README.md)；上线核对见 [DEPLOYMENT-CHECKLIST.md](../DEPLOYMENT-CHECKLIST.md)。
+```bash
+node tools/backup-sqlite.mjs --database /opt/jiuyue-sports/data/site.db --directory /opt/jiuyue-sports/backups --retention-days 90
+node tools/verify-backup.mjs --backup /opt/jiuyue-sports/backups/<generated-name>.db
+```
 
-备份包含个人信息，必须加密、限制访问并按保留政策清理。不得在应用仍写入时手工覆盖数据；没有已验证备份时禁止清理数据卷或使用会删除卷的命令。
+工具通过 SQLite online backup API 读取包括已提交 WAL 的一致快照，先生成唯一 UTC 时间与随机后缀的 `.partial` 文件，再检查 `integrity_check`、`foreign_key_check`、迁移版本/SQL 校验和及业务表，刷盘并原子重命名。完成后写入并复核 `.db.sha256.txt`；内容严格为 `SHA256摘要␠␠文件名` 加换行，不含绝对路径。移动时必须一起移动数据库和 sidecar，保留文件名。在 Linux 也可于备份目录执行 `sha256sum -c <generated-name>.db.sha256.txt`，但仍须运行 Node 验证工具检查 SQLite。只有双文件齐全且验证成功才算可用恢复点；中断留下的 partial 或无 sidecar 文件须人工确认后清理，不能当作成功备份。sidecar 只能检测损坏，不能抵御能同时改写备份与校验和的攻击者。
+
+新的发布备份同时保留旧 `.sha256` 和新增可移动 `.sha256.txt`，并转换为独立 DELETE journal 快照，可由相同验证/恢复工具读取。旧版本只生成 `.sha256` 的恢复点必须先在受控环境核对原摘要，再由操作员按受审流程转换 sidecar 或用当时的恢复程序；禁止用新计算摘要直接为未知来源文件背书。备份文件旁存在 WAL/SHM/journal 时新验证器拒绝，把整组文件保全并处理，不能默默忽略 sidecar。
+
+日常备份和 sidecar 为 0600、目录为 0700。每次新备份验证成功后，只清理此目录中名称符合 `jiuyue-<UTC>-<random>.db` 且生成时间超过 90 天的文件对；不依赖拷贝后变化的 mtime，不清理任意命名的操作员文件。安全恢复点在独立的 `pre-restore-backups` 目录中保留，由操作员按 90 天政策逐一核实后清理；发布恢复点也单独按 90 天政策清理。灾难/调查期间暂停这些人工清理，记录延长期限。每日备份目标 RPO 为 24 小时，超过 36 小时告警；RTO 必须通过真实目标主机演练测量，不能由本地测试推定。
+
+原生 Linux：核实 `/usr/bin/node` 是 Node 24+；部署 root 所有且不可由应用改写的代码和两个示例 unit，确保数据目录归 `jiuyue`，并运行：
+
+```bash
+sudo install -d -m 0700 -o jiuyue -g jiuyue /opt/jiuyue-sports/backups
+sudo install -m 0644 deploy/jiuyue-backup.service.example /etc/systemd/system/jiuyue-backup.service
+sudo install -m 0644 deploy/jiuyue-backup.timer.example /etc/systemd/system/jiuyue-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl start jiuyue-backup.service
+sudo systemctl enable --now jiuyue-backup.timer
+systemctl list-timers jiuyue-backup.timer
+systemctl status jiuyue-backup.service --no-pager
+```
+
+每日主机时间 03:30（随机延迟最多 10 分钟）、关机错过后补跑，30 分钟超时；以普通 `jiuyue` 账户执行。WAL 只读连接仍可能需要共享内存访问，因此 unit 必须允许写 data 及 backups；不能把 data 强制只读。不要读取应用 `.env`，备份不需要后台密码。Compose 主机需将 unit 中数据库路径和 `ReadWritePaths` 改为明确核实的对应环境数据卷挂载路径、独立备份目录，并使服务账户的 UID/GID 与卷的 1000:1000 一致；由已授权 Docker 操作员用 `docker volume inspect --format '{{.Mountpoint}}' jiuyue-staging_staging_data`（生产用 `jiuyue-production_production_data`）读取路径。不要给备份账户 Docker socket 权限。Docker Desktop 的 VM 卷无法直接供 Windows 原生 Node 访问；使用下列镜像内命令做人工备份，正式日程在 Linux 主机配置。
+
+```bash
+docker compose --env-file .env.staging -f compose.staging.yaml exec -T app node tools/backup-sqlite.mjs --database /app/data/site.db --directory /app/data/backups
+```
+
+至少一份每日复制至不同故障域的加密存储。部署者须配置目的地、加密密钥、最小权限上传凭据、90 天生命周期及删除权限隔离；凭据仅放受控部署 secret/0600 凭据文件，禁止作为 URL、命令参数或日志内容。完成上传后从远端取回、解密并运行相同验证工具，每月实际恢复一次，并向告警系统提供复制完成时间与失败状态。仓库没有配置任何异地目的地或凭据，也没有冒充上传成功；本机备份成功不能满足此项验收。
+
+恢复时先封锁写流量并停止所有 app、备份定时器、迁移和导入进程，保持停止至替换完成。`--app-stopped` 是操作员对已停止状态的明确声明，工具不能发现所有空闲进程；`--confirm-target` 必须是目标的精确绝对路径。脚本额外拒绝 WAL/SHM/journal 残留、链接文件、非本账户目标、重复恢复锁、源等于目标、缺失/错误哈希或不匹配迁移版本。恢复所用镜像必须与备份迁移完全匹配；不自动迁移或降级，不自动修复损坏的现有库。先验证源，再为现有目标创建验证过的 `pre-restore-backups` 安全副本，最后复制到同目录临时文件、再次验证实际待替换字节、刷盘并原子替换。文件归当前服务账户、0600；目录 0700。Windows chmod 不代表 ACL 收紧，必须先按普通服务账户限制目录 ACL 并复核继承权限。
+
+```bash
+sudo systemctl stop jiuyue-backup.timer jiuyue-backup.service
+sudo systemctl stop jiuyue-sports.service
+systemctl is-active jiuyue-sports.service  # 必须 inactive
+sudo -u jiuyue /usr/bin/node /opt/jiuyue-sports/tools/restore-sqlite.mjs --backup /opt/jiuyue-sports/backups/<generated-name>.db --database /opt/jiuyue-sports/data/site.db --app-stopped --confirm-target /opt/jiuyue-sports/data/site.db
+# 核实成功代码 DATABASE_RESTORED 后，按删除清单重做删除并评估恢复后会话。
+sudo systemctl start jiuyue-sports.service
+node deploy/smoke-test.mjs https://<real-domain> production
+sudo systemctl start jiuyue-backup.timer
+```
+
+Compose 恢复（已停止主机备份日程；设置好对应环境及恢复镜像摘要）：
+
+```bash
+docker compose --env-file .env.staging -f compose.staging.yaml stop app
+docker compose --env-file .env.staging -f compose.staging.yaml ps --status running --services  # 不得出现 app
+docker compose --env-file .env.staging -f compose.staging.yaml run --rm --no-deps app node tools/restore-sqlite.mjs --backup /app/data/backups/<generated-name>.db --database /app/data/site.db --app-stopped --confirm-target /app/data/site.db
+docker compose --env-file .env.staging -f compose.staging.yaml up -d --wait app
+node deploy/smoke-test.mjs https://<staging-domain> staging
+```
+
+生产替换所有 staging 参数并使用 production 冒烟模式。哈希或迁移验证失败时停止并选择正确备份/镜像；不得绕过验证。若断电留下 WAL/SHM/journal，先保持服务停止，在受控独立位置保全整个库及所有 sidecar，按 SQLite 故障恢复程序用匹配镜像打开并正常关闭以恢复/检查点；不要手工删 WAL，里面可能有已提交数据。若现有库损坏使安全备份失败，保全整组文件并经过人工事件处置，将已确认的损坏文件移至隔离目录，再对空目标执行恢复。`.restore-lock` 残留也只能在确认无恢复进程且已保全临时/安全文件后移走。禁止 `down -v` 或清理数据卷；日志不得包含记录或凭据。
 
 ## 监控、日志与事件
 
@@ -99,7 +149,30 @@ staging 成功后，production 作业等待 GitHub `production` Environment 的 
 
 镜像默认执行 `node deploy/healthcheck.mjs readiness`；需要单独检查进程时执行 `node deploy/healthcheck.mjs liveness`。脚本读取容器 `PORT`，超时或无效响应返回非零，不打印响应和秘密。Docker 每 30 秒检查、连续 3 次失败标记 unhealthy；Compose 启动时等待应用健康。Caddy 每 10 秒检查就绪状态，失败后停用上游，恢复后重新接入；检查之间存在短暂延迟。单纯 unhealthy 不会触发 Docker 的 restart 策略，须配合监控与人工处置，禁止把重启策略当作数据库修复机制。
 
+生产镜像同时携带显式白名单中的 SQLite 备份、验证、恢复、JSON 导入及监控脚本；不包含 systemd 安装、凭据生成或 Docker 客户端。监控的 Docker inspection 在授权主机执行，不能在应用容器中挂载 Docker socket。
+
 使用带请求 ID 的结构化 JSON 日志。日志不得记录密码、会话 Cookie、完整电话、预约正文或其他不必要个人信息；为日志、统计事件、预约数据和备份分别制定保留期限。
+
+主机健康采集入口（Node 24+，只读 Docker inspection 需由现有授权运维账户执行；不要给应用增加 socket 挂载）：
+
+```bash
+node deploy/monitor-health.mjs --origin https://<real-domain> --database <absolute-host-volume-path>/site.db --backup-directory <absolute-backup-directory> --container <verified-app-container-name>
+```
+
+每 5 分钟由主机监控系统调用。成功输出 `{"ok":true,"codes":[]}`、退出 0；失败输出固定代码数组、退出 1，无域名、路径、响应正文、证书主体、SQL 内容或 Docker 原始输出。监控平台只在新故障、恢复或需操作时通知，重复告警去重；每 5 分钟保留心跳，超过 15 分钟无采集也告警，以覆盖进程挂起/未执行。HTTP/TLS/Docker 探测限时 10 秒，外层作业加 60 秒超时；大库完整性检查时间随数据量变化。首次部署发送测试告警并确认值班人收到，随后撤销测试。
+
+| 代码 | 操作 |
+| --- | --- |
+| `HOMEPAGE_FAILED` / `READINESS_FAILED` | 检查代理、镜像健康和数据库权限/锁；不要把重启当作修复 |
+| `DISK_LOW` / `DISK_CHECK_FAILED` | 数据盘可用空间小于 1 GiB 或采集失败，扩容/核实挂载；禁止先删未经验证的数据 |
+| `CONTAINER_DOWN` / `CONTAINER_CHECK_FAILED` | 核实目标容器正在运行、未 restarting 以及采集权限 |
+| `CONTAINER_RESTARTS` | 当前容器自创建累计重启至少 3 次；调查原因，记录后可重新创建容器重置计数 |
+| `CERTIFICATE_EXPIRING` / `CERTIFICATE_CHECK_FAILED` | 剩余不超过 14 天或握手/信任/域名检查失败，修复 Caddy 续期、DNS 和网络 |
+| `BACKUP_STALE` / `BACKUP_UNVERIFIED` | 最新生成备份超过 36 小时、时间在未来、缺失或验证失败；检查 timer/磁盘，重新备份并核实异地副本 |
+| `SQLITE_FAILED` | 主库完整性、外键、迁移或读取失败，停止写入并进入恢复程序 |
+| `MONITOR_CONFIGURATION` | 修正缺失参数/非法 origin；不可将配置错误当作健康 |
+
+SQLite 与最新备份均实际验证，不凭 marker 文件宣告正常。检测失败可能同时报告采集错误及其对应不满足的阈值。生产强制 HTTPS 信任验证；只有显式 `--allow-local-http` 才允许回环 HTTP 演练并跳过证书项，这不构成 HTTPS 验收。监控只验证本地备份，异地复制须由外部作业另行监控。默认应用/安全日志保留 30 天、仅含固定代码的健康指标保留 30 天、发布/演练非个人元数据保留 180 天；事故保全延长须记录理由与删除日期。不要把原始日志、数据库或备份上传为 CI artifact。
 
 事件响应时：限制受影响功能或流量，保留不含敏感信息的证据，确认最近备份与回滚版本，恢复服务后验证健康、数据与删除清单，并记录原因、影响和后续修复。安全边界和凭据处理见 [SECURITY.md](../SECURITY.md)。
 
@@ -120,3 +193,7 @@ node tools/import-json-data.mjs --source ./protected/site-data.json --database .
 切换时把 `DATA_PATH` 指向新 `site.db`，保留受保护的源备份；运行时不会自动导入或双写。回滚前确认旧源备份与新数据库的差异，新产生的 SQLite 数据不会自动同步回旧版本。
 
 生产切换前必须完成 staging 全链路演练、旧数据导入核对以及备份恢复演练。确认 DNS、HTTPS、反向代理、密钥、监控与告警、回滚镜像和负责人可用；按发布流程切换后执行生产烟测。任何前置验证失败都应停止切换，修复并重新验证，而不是绕过检查。
+
+本地替代演练（仅有 Docker 时）：构建后执行 `RECOVERY_IMAGE=jiuyue-sports:recovery node --test tests/deployment/recovery-compose.test.mjs`，镜像先用 `docker build -t jiuyue-sports:recovery .` 构建。PowerShell 使用 `$env:RECOVERY_IMAGE='jiuyue-sports:recovery'` 后执行同一 Node 命令。测试把输入镜像解析成不可变本机 image ID，创建唯一 `jy-recovery-<random>` Compose 项目、Caddy 回环 HTTP 代理及临时合成数据卷；导入 2 条询盘、3 条事件，加入虚构会话/审计，执行全套 staging HTTP 冒烟，在线备份，停止应用并保全移走原数据库，恢复至空目标，逐表比较计数/摘要，重启后再次执行同套公开/管理烟测，再验证替换已有库的安全备份和 Linux 0600/UID 1000。测试结束只移除它自己创建的项目及合成数据卷，不读取现有 `.env` 或生产卷。未设置 `RECOVERY_IMAGE` 时此独立测试跳过，不算验收成功；它不在默认 `npm test` 中自动运行。
+
+真实 staging/production 未配置时，只能记录本地演练和 [只读切换预检](../DEPLOYMENT-CHECKLIST.md#切换前只读预检及证据)；DNS、防火墙、GitHub 审批、部署 secrets、异地复制、公网证书、监控收件与运维访问必须保留为未验证。不能把本地 HTTP 或本机 image ID 当作已推送的 registry digest、公网 HTTPS 或真实 staging 发布证据。

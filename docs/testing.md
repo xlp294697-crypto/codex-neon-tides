@@ -2,6 +2,8 @@
 
 测试使用虚构、最小化的夹具和独立临时数据目录。生产预约、访问记录、日志、电话、会话或其他个人数据绝不得进入测试、夹具、截图或错误输出。
 
+恢复专项：`node --test tests/integration/backup-restore.test.mjs tests/integration/monitor-health.test.mjs` 验证 WAL 快照、可移动 SHA-256、完整性/外键、迁移兼容、安全备份、停止声明、留存以及监控失败代码。实际本地容器演练先 `docker build -t jiuyue-sports:recovery .`，再设置 `RECOVERY_IMAGE=jiuyue-sports:recovery` 运行 `node --test tests/deployment/recovery-compose.test.mjs`（PowerShell 用 `$env:RECOVERY_IMAGE`）。此测试显式创建并清理它自己的 Compose 项目及虚构数据卷，经 Caddy 回环 HTTP 执行恢复前后的 staging 冒烟，不读取用户 `.env`、不连接生产。独立运行且没有镜像变量时跳过；不能将跳过记为恢复验证，也不替代公网 TLS、真实 staging 或异地恢复。完整过程和限制见运维指南。
+
 ## 四个测试层
 
 1. **单元测试**：覆盖配置校验、输入规范化、密码校验、统计聚合、时区换算、保留策略和错误映射等纯逻辑；必须快速且互不共享状态。

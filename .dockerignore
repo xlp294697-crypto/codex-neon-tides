@@ -10,3 +10,10 @@
 !public/**
 !deploy/
 !deploy/healthcheck.mjs
+!deploy/monitor-health.mjs
+!tools/
+!tools/sqlite-operations.mjs
+!tools/backup-sqlite.mjs
+!tools/verify-backup.mjs
+!tools/restore-sqlite.mjs
+!tools/import-json-data.mjs

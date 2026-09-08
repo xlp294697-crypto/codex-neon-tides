@@ -45,6 +45,8 @@ tests/              unit、integration、e2e 与 fixtures
 
 SQLite 启用 WAL、外键约束和合理的 busy timeout。`db/` 负责连接选项、事务入口、迁移、健康检查和备份协调；其他层不得直接管理连接或绕过迁移。
 
+受控离线/运维入口例外：`tools/*sqlite.mjs`、`tools/verify-backup.mjs`、共享的 `tools/sqlite-operations.mjs` 及 `deploy/release-db.mjs` 直接管理独立 SQLite 连接，执行在线快照、完整性与迁移验证或停止应用后的恢复；不供业务请求调用。`deploy/monitor-health.mjs` 在主机采集公开健康、磁盘、容器、证书、主库及最新备份状态，只输出固定状态代码。恢复比应用回滚启动更保守，要求备份迁移版本与当前工具携带 SQL 完全匹配，不自动迁移恢复源。
+
 数据库基础接口为 `openDatabase(path)`、`migrate(db)` 和 `closeDatabase(db)`，使用 Node.js 24 内置 `node:sqlite`。连接启用 WAL、外键、5000ms busy timeout 和 NORMAL synchronous；`migrate` 返回当前版本，使用单个事务执行待应用迁移并记录 SHA-256 校验值。已应用迁移缺失或校验不符时拒绝继续；SQL 文件固定 LF 换行，禁止修改已应用迁移。`DATA_PATH` 现在指向 SQLite，默认 `data/site.db`。应用启动先迁移并清理过期事件，优雅退出在统计缓冲写入完成后关闭数据库。
 
 所有业务 SQL 与事务保存在 `repositories/`。预约状态变更和审计、删除和审计、每批统计、容量淘汰分别原子执行；容量淘汰同样生成无正文的删除审计。仓储把数据库列映射为现有 camelCase API 字段。事务使用可嵌套的同步 savepoint，让 JSON 导入覆盖全部业务记录，失败时统一回滚。

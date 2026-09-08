@@ -48,6 +48,12 @@ export async function backupDatabase(source, target) {
     db.close();
   }
   chmodSync(target, 0o600);
+  const standalone = new DatabaseSync(target);
+  try {
+    standalone.exec('PRAGMA journal_mode = DELETE');
+  } finally {
+    standalone.close();
+  }
   const copy = new DatabaseSync(target, { readOnly: true });
   try {
     const integrity = copy.prepare('PRAGMA integrity_check').all();
@@ -65,6 +71,16 @@ export async function backupDatabase(source, target) {
     .update(readFileSync(target))
     .digest('hex');
   writeFileSync(`${target}.sha256`, `${digest}\n`, { flag: 'wx', mode: 0o600 });
+  // Keep the legacy digest for existing release consumers, and provide the
+  // portable sidecar consumed by the shared guarded recovery tools.
+  writeFileSync(
+    `${target}.sha256.txt`,
+    `${digest}  ${path.basename(target)}\n`,
+    {
+      flag: 'wx',
+      mode: 0o600,
+    },
+  );
   if (
     createHash('sha256').update(readFileSync(target)).digest('hex') !==
     readFileSync(`${target}.sha256`, 'utf8').trim()

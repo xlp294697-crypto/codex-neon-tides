@@ -5,6 +5,7 @@ Description=Daily backup for Jiuyue Sports website data
 OnCalendar=*-*-* 03:30:00
 Persistent=true
 RandomizedDelaySec=10m
+Unit=jiuyue-backup.service
 
 [Install]
 WantedBy=timers.target

@@ -26,7 +26,7 @@
 
 - [ ] 已通过初始化工具生成 `.env`，后台密码为 16–250 位且至少包含三类字符，没有使用示例域名、弱密码、品牌词、手机号或默认密码。
 - [ ] `.env` 不在公开仓库、共享盘、聊天记录或截图中。
-- [ ] Windows 自启使用普通账户的 S4U、Limited 任务并固定 Node.js 20+ 绝对路径，没有使用 SYSTEM；`.env`、`data`、`backups` ACL 已复核。
+- [ ] Windows 自启使用普通账户的 S4U、Limited 任务并固定 Node.js 24+ 绝对路径，没有使用 SYSTEM；`.env`、`data`、`backups` ACL 已复核。
 - [ ] Linux 代码和 unit 由 root 持有，`jiuyue` 只能写 `data`；只有备份 unit 能写 `backups`。
 - [ ] 只有确需处理询盘的人员能访问后台，人员变动时立即更换密码。
 - [ ] 服务器、Docker、Node.js、Caddy/Nginx 和操作系统已安装安全更新。
@@ -42,7 +42,7 @@
 - [ ] 正常预约可进入后台，状态可更新，删除操作有确认并能生效。
 - [ ] 管理接口未登录时返回 401，修改与删除在缺少 CSRF 令牌时返回 403。
 - [ ] `/api/health` 返回正常，重启服务器后网站可自动恢复。
-- [ ] 已在目标主机执行 `npm run check` 与 `node --test`；Docker 部署还实际通过 `docker compose config`、`docker compose up -d --build` 和容器健康检查。
+- [ ] 干净检出已执行 `npm ci` 和完整质量门禁；交付镜像已构建、扫描并记录摘要。目标主机仅拉取该摘要，通过 `docker compose config --quiet`、`up -d --wait` 和容器健康检查，不在生产现场构建。
 
 ## 数据与恢复
 
@@ -60,3 +60,27 @@
 - [ ] 有外部健康监测访问 `https://域名/api/health`，并把告警发送给负责人。
 - [ ] 定期查看磁盘容量、备份结果、证书续期和异常登录情况。
 - [ ] 上线后新增 CRM、短信、支付、地图或第三方统计前先更新数据流图、权限和隐私告知。
+
+## 切换前只读预检及证据
+
+以下检查不修改流量、DNS、主机规则或 GitHub 设置。只读失败或无证据即保持待办；不要把仓库中的示例配置当作实际已启用。操作命令中的占位符必须替换成已核实的目标；含个人信息的结果只在受控终端查看，发布记录只保留计数、摘要及通过/失败。
+
+| 检查 | 只读命令/核实方式 | 必须附的证据 |
+| --- | --- | --- |
+| DNS | `dig +short A <domain>`、`dig +short AAAA <domain>`，对比审批的服务器 IP | 实际记录、TTL 与切换/回退责任人 |
+| 防火墙 | Linux `sudo nft list ruleset`（已有 ufw 则 `sudo ufw status verbose`）、`ss -lnt` | 只开放审批端口，应用无公网映射 |
+| GitHub 审批 | `gh api repos/<owner>/<repo>/environments/production --jq '{reviewers: .protection_rules, branches: .deployment_branch_policy}'` | required reviewers 非空、main 限制、审批人权限及演练记录 |
+| Secrets | `gh secret list --env staging`、`gh secret list --env production`；主机仅 `stat` 权限，不 `cat .env` | 名称齐备、两环境隔离、有效性由 staging 实际部署证明 |
+| 镜像/回滚 | `docker inspect --format '{{.Config.Image}}' <app-container>`，核对受控 `.release-state`、前一发布包 | 候选和前一摘要、SQL 校验和、扩展迁移兼容及回滚烟测 |
+| 异地恢复 | 存储控制台只读检查已配置的加密、权限、生命周期和最新复制状态 | 远端取回并验证/实际恢复记录；仅本地副本不满足 |
+| 导入计数 | `node tools/import-json-data.mjs --source <protected-source> --database <target> --dry-run` | 两表 `source = imported + skipped`、重复导入结果，禁止输出记录 |
+| 监控目的地 | 监控平台只读查看探测与路由、值班安排 | 7 项探测、15 分钟失联报警、真实测试告警收件确认 |
+| Caddy/HTTPS | `curl --silent --show-error --head https://<domain>/`、`openssl s_client -connect <domain>:443 -servername <domain> </dev/null 2>/dev/null \| openssl x509 -noout -dates` | 可信证书、域名匹配、续期证据、HTTP 跳转、剩余大于 14 天 |
+| 运维访问 | `ssh <configured-host> 'id; command -v docker; command -v node'`（不得关闭主机密钥校验） | 两名授权人员、密钥轮换/应急访问和主机指纹 |
+
+- [ ] staging 仅含明确虚构数据；同一候选摘要完成全部公共/管理冒烟和浏览器流程。
+- [ ] 已按 [运维恢复程序](docs/operations.md#备份与恢复) 完成停止、备份、保全移走数据库、恢复、启动与逐表核对；记录耗时/RPO/RTO，无个人数据进入演练报告。
+- [ ] 每日 timer 最近一次验证成功、90 天清理、异地恢复和每月演练责任人明确。
+- [ ] 恢复后删除清单、会话处置、失败停切换和回滚责任人均已确认。
+- [ ] Git 历史、最终镜像层、日志和测试产物未发现密钥/个人数据；记录扫描工具版本、范围与结果，不能仅凭 `.gitignore` 确认。
+- [ ] release run summary 汇总上述实际证据后，才审批 production；本地 Compose 临时数据演练只能证明本地机制，不能勾选真实 staging、公网证书、GitHub Environment 或异地存储验收。
