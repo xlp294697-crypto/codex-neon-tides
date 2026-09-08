@@ -19,6 +19,8 @@
 
 ## 备份与恢复
 
+当前仓储已切换到 SQLite。旧 JSON 备份/恢复脚本尚待后续运维任务替换，不能用于 `site.db`；不得用旧 JSON 文件覆盖 SQLite。正式切换仍需完成 SQLite 备份恢复验证。
+
 - 每日执行 SQLite 在线备份并生成 SHA-256；至少一份复制到服务器外受控存储。
 - 自动验证备份完整性，每月进行实际恢复演练。
 - 恢复前确认备份、目标和服务状态；恢复后执行健康检查、数据核对和必要的删除清单。
@@ -35,5 +37,19 @@
 事件响应时：限制受影响功能或流量，保留不含敏感信息的证据，确认最近备份与回滚版本，恢复服务后验证健康、数据与删除清单，并记录原因、影响和后续修复。安全边界和凭据处理见 [SECURITY.md](../SECURITY.md)。
 
 ## 生产切换
+
+旧 JSON 导入使用 Node.js 24+。先停止旧实例写入并为源文件生成受控备份；在独立位置指定新的数据库路径，禁止原位覆盖源文件。先预检，再导入，再重复预检核对：
+
+```bash
+node tools/import-json-data.mjs --source ./protected/site-data.json --database ./data/site.db --dry-run
+node tools/import-json-data.mjs --source ./protected/site-data.json --database ./data/site.db
+node tools/import-json-data.mjs --source ./protected/site-data.json --database ./data/site.db --dry-run
+```
+
+源文件必须是 `version: 1`、含 `inquiries` 和 `events` 数组的对象；记录需要 ID、有效时间和对应隐私/统计同意记录。工具不补造同意信息；结构或记录无效时整次失败。来源字段在未允许归因的预约中清空，未知个人标识字段丢弃，referrer 仅保留来源站点。正常输出仅有两类记录各自的 `source`、`imported`、`skipped` 数量及 `dryRun`，每类应满足 `source = imported + skipped`。已有同 ID 记录和同一源中的重复 ID 均跳过，不覆盖已跟进的数据。
+
+`--dry-run` 在内存中验证并用只读连接查询已有目标，不创建目标文件；其 `imported` 表示预计新增数。真实导入的全部业务记录处于同一个事务，任意失败统一回滚；首次建库/迁移可能已完成，空数据库可保留。导入不执行保留期淘汰，便于先核对全部记录；应用启动后按既有保留期与容量配置清理。源文件始终保持原样。验证关键字段时仅在受控后台查看，禁止把个人字段打印到日志。
+
+切换时把 `DATA_PATH` 指向新 `site.db`，保留受保护的源备份；运行时不会自动导入或双写。回滚前确认旧源备份与新数据库的差异，新产生的 SQLite 数据不会自动同步回旧版本。
 
 生产切换前必须完成 staging 全链路演练、旧数据导入核对以及备份恢复演练。确认 DNS、HTTPS、反向代理、密钥、监控与告警、回滚镜像和负责人可用；按发布流程切换后执行生产烟测。任何前置验证失败都应停止切换，修复并重新验证，而不是绕过检查。

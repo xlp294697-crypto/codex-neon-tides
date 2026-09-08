@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createApp } from '../../src/app.mjs';
+import { loadConfig } from '../../src/config.mjs';
+import { openDatabase } from '../../src/db/database.mjs';
+import { createSessionRepository } from '../../src/repositories/session-repository.mjs';
+
+test('failed session cleanup does not escape the maintenance callback and can retry', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'jy-storage-lifecycle-'));
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const config = loadConfig({ DATA_PATH: path.join(directory, 'site.db'), ADMIN_PASSWORD: 'Synthetic!Fixture934Key', SESSION_SECRET: 'synthetic-session-secret-at-least-thirty-two-characters' }, root);
+  const app = createApp(config);
+  let db;
+  t.after(async () => { db?.close(); app.lifecycle.closeDatabase(); await rm(directory, { recursive: true, force: true }); });
+  await app.lifecycle.initialize();
+  db = openDatabase(config.dataPath);
+  const sessions = createSessionRepository(db);
+  const session = { tokenHash: 'a'.repeat(64), csrfTokenHash: 'b'.repeat(64), role: 'admin', createdAt: 0, expiresAt: 1 };
+  sessions.saveSession(session);
+  db.exec("CREATE TRIGGER reject_cleanup BEFORE DELETE ON admin_sessions BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END");
+  t.mock.method(console, 'error', () => undefined);
+  assert.doesNotThrow(() => app.lifecycle.cleanupExpiredState());
+  assert.deepEqual(sessions.findSession(session.tokenHash, 0), session);
+  db.exec('DROP TRIGGER reject_cleanup');
+  app.lifecycle.cleanupExpiredState();
+  assert.equal(sessions.findSession(session.tokenHash, 0), null);
+});

@@ -1,11 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { openDatabase } from '../src/db/database.mjs';
+import { migrate } from '../src/db/migrate.mjs';
+import { createAnalyticsRepository } from '../src/repositories/analytics-repository.mjs';
+import { createInquiryRepository } from '../src/repositories/inquiry-repository.mjs';
+import { event } from './fixtures/storage.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const adminPassword = 'Cobalt!River7Quartz#2026';
@@ -21,6 +26,12 @@ let child;
 let childOutput = '';
 let boundaryTimestamp;
 let boundaryDate;
+
+function readStoredData() {
+  const db = openDatabase(dataPath);
+  try { return { events: createAnalyticsRepository(db).findAll(), inquiries: createInquiryRepository(db).findAll() }; }
+  finally { db.close(); }
+}
 
 function shanghaiDateKey(value) {
   const parts = Object.fromEntries(
@@ -119,7 +130,7 @@ async function login(password = adminPassword) {
 
 test.before(async () => {
   temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'jiuyue-production-test-'));
-  dataPath = path.join(temporaryDirectory, 'site-data.json');
+  dataPath = path.join(temporaryDirectory, 'site.db');
   port = await availablePort();
 
   const now = new Date();
@@ -129,15 +140,14 @@ test.before(async () => {
   boundaryDate = shanghaiDateKey(boundaryTimestamp);
   assert.notEqual(boundaryDate, boundaryTimestamp.slice(0, 10), '测试种子必须跨过上海时区午夜');
   const expiredTimestamp = new Date(Date.now() - 181 * 86400000).toISOString();
-  const seededData = {
-    version: 1,
-    events: [
-      { id: 'expired-event', createdAt: expiredTimestamp, eventType: 'page_view', page: '/', visitorId: 'visitor-expired' },
-      { id: 'boundary-event', createdAt: boundaryTimestamp, eventType: 'page_view', page: '/', visitorId: 'visitor-boundary' },
-    ],
-    inquiries: [],
-  };
-  await writeFile(dataPath, `${JSON.stringify(seededData, null, 2)}\n`, 'utf8');
+  const db = openDatabase(dataPath);
+  try {
+    migrate(db);
+    createAnalyticsRepository(db).insertBatch([
+      event('expired-event', { createdAt: expiredTimestamp, visitorId: 'visitor-expired' }),
+      event('boundary-event', { createdAt: boundaryTimestamp, visitorId: 'visitor-boundary' }),
+    ]);
+  } finally { db.close(); }
   await startServer();
 });
 
@@ -157,7 +167,7 @@ test('完整生产接口、安全控制、隐私口径、时区、留存与会�
   assert.equal(result.response.headers.get('x-frame-options'), 'DENY');
   assert.ok(result.response.headers.get('content-security-policy').includes("default-src 'self'"));
 
-  const cleanedAtStartup = JSON.parse(await readFile(dataPath, 'utf8'));
+  const cleanedAtStartup = readStoredData();
   assert.equal(cleanedAtStartup.events.some((event) => event.id === 'expired-event'), false, '默认 180 天留存应在启动时清理过期事件');
   assert.equal(cleanedAtStartup.events.some((event) => event.id === 'boundary-event'), true);
 
@@ -276,7 +286,7 @@ test('完整生产接口、安全控制、隐私口径、时区、留存与会�
   });
   assert.equal(result.response.status, 200);
 
-  const storedBeforeRestart = JSON.parse(await readFile(dataPath, 'utf8'));
+  const storedBeforeRestart = readStoredData();
   assert.equal(storedBeforeRestart.inquiries[0].status, 'Contacted');
   const storedPageView = storedBeforeRestart.events.find((event) => event.visitorId === 'visitor-test-1' && event.eventType === 'page_view');
   assert.equal(storedPageView.referrer, 'https://ref.example');

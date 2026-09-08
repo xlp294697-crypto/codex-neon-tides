@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import path from 'node:path';
 import { loadConfig } from '../../src/config.mjs';
 
 const valid = {
@@ -7,6 +8,11 @@ const valid = {
   ADMIN_PASSWORD: 'Valid-Testing-Key-4937!',
   SESSION_SECRET: 's'.repeat(48),
 };
+
+test('DATA_PATH addresses SQLite and defaults to data/site.db', () => {
+  assert.equal(loadConfig(valid, process.cwd()).dataPath, path.join(process.cwd(), 'data', 'site.db'));
+  assert.equal(loadConfig({ ...valid, DATA_PATH: './custom.db' }, process.cwd()).dataPath, path.resolve('custom.db'));
+});
 
 test('loadConfig rejects missing administrator credentials', () => {
   assert.throws(

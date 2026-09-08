@@ -83,6 +83,12 @@ export function startServer(config) {
         `停止时仍有 ${app.lifecycle.eventBufferLength} 条统计事件未写入。`,
       );
     }
+    try {
+      app.lifecycle.closeDatabase();
+    } catch (error) {
+      failed = true;
+      console.error('关闭数据库失败：', error);
+    }
     if (failed) process.exitCode = 1;
     clearTimeout(forcedExit);
   }
@@ -106,7 +112,7 @@ export function startServer(config) {
       console.log(
         `Jiuyue Sports ${config.nodeEnv === 'production' ? 'production' : 'development'} server: http://${config.host}:${config.port}`,
       );
-      console.log(`Data file: ${config.dataPath}`);
+      console.log(`SQLite database: ${config.dataPath}`);
       if (config.nodeEnv === 'production' && !config.cookieSecure) {
         console.warn(
           'WARNING: COOKIE_SECURE=false；只有在完全隔离的本机 HTTP 测试中才应使用。',

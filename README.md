@@ -9,7 +9,7 @@
 - 无默认密码的后台认证、登录限流、CSRF 防护、请求体限制和安全响应头；
 - Docker 自动 HTTPS、既有反向代理接入、Windows/Linux 原生运行、开机自启和备份脚本。
 
-交付包中的 `data/site-data.json` 是空数据，不包含制作电脑上的真实访问记录、询盘、日志、密码或会话密钥。原始证照资料也不会随包交付，网站只使用 `public/media/` 中的发布版图片。
+运行数据保存在 SQLite（默认 `data/site.db`，可通过 `DATA_PATH` 指定）。交付包中的旧 `data/site-data.json` 仅是空迁移源示例，不包含制作电脑上的真实访问记录、询盘、日志、密码或会话密钥。原始证照资料也不会随包交付，网站只使用 `public/media/` 中的发布版图片。
 
 ## 工程文档
 
@@ -149,7 +149,7 @@ APP_BIND_IP=192.168.10.20
 
 ## Windows 原生运行
 
-要求安装 Node.js 20 或更高版本，建议系统级安装到 `Program Files`。程序和数据必须放在服务器本地磁盘，不要放在 S4U 任务无法访问的网络共享中。
+要求安装 Node.js 24 或更高版本，建议系统级安装到 `Program Files`。程序和数据必须放在服务器本地磁盘，不要放在 S4U 任务无法访问的网络共享中。
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\Initialize-Config.ps1
@@ -190,7 +190,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\Uninstall-Windows-Autostart.ps1
 
 ## Linux 原生运行
 
-要求 Node.js 20 或更高版本。示例安装位置为 `/opt/jiuyue-sports`：
+要求 Node.js 24 或更高版本。示例安装位置为 `/opt/jiuyue-sports`：
 
 ```bash
 id -u jiuyue >/dev/null 2>&1 || sudo useradd --system --home /opt/jiuyue-sports --shell /usr/sbin/nologin jiuyue
@@ -235,11 +235,17 @@ systemctl list-timers jiuyue-backup.timer
 
 ## 数据与备份
 
-原生运行的数据文件：
+原生运行的 SQLite 数据库：
 
 ```text
-data/site-data.json
+data/site.db
 ```
+
+旧 JSON 导入步骤、只读预检和数量核对见[运维指南](docs/operations.md#生产切换)。`DATA_PATH` 必须指向新的 SQLite 路径；旧实例数据需要显式导入，不能直接把 JSON 当数据库打开。
+
+### 旧 JSON 版本备份与恢复（仅用于迁移前）
+
+以下旧脚本仍处理 JSON，不能备份或恢复当前 SQLite 数据库。SQLite 在线备份与恢复工具将在后续运维任务补齐；正式切换前必须完成对应演练。
 
 Windows 备份：
 
@@ -310,7 +316,7 @@ Docker 恢复由脚本完成“哈希校验—当前数据安全副本—停止 
 
 ## 上线前测试
 
-安装 Node.js 20+ 后，在程序目录执行：
+安装 Node.js 24+ 后，在程序目录执行：
 
 ```bash
 npm run check
@@ -326,7 +332,7 @@ node --check public/admin.js
 node --test
 ```
 
-测试会使用临时数据目录和测试凭据，不会修改正式 `data/site-data.json`。
+测试会使用临时数据目录和测试凭据，不会修改正式 SQLite 或旧 JSON。
 
 ## 常见故障
 
@@ -352,7 +358,7 @@ node --test
 
 ## 能力边界
 
-- 当前数据层是单实例 JSON 原子写入，适合单企业官网、常规询盘与内容统计。多台应用并行写入或高并发业务应迁移到受控数据库。
+- 当前数据层是单实例 SQLite 事务写入，适合单企业官网、常规询盘与内容统计；按一个应用实例运行。
 - 当前不发送短信、邮件或微信通知；新询盘在 `/admin` 查看。接入外部通知、CRM、支付、地图或第三方统计前，应单独配置凭据、最小权限、失败重试与隐私告知。
 - `public/privacy.html` 是与当前程序行为一致的运营模板，不替代针对实际托管、人员权限、线下营销和未成年人业务流程的专业法律审查。
 - 程序不会自行发布到你的服务器，也不包含任何服务器、域名、云平台或证书凭据。

@@ -32,7 +32,7 @@ tests/              unit、integration、e2e 与 fixtures
 
 当前模块拆分已落实到 `config.mjs`、`http/`、`middleware/`、`validation/` 和 `services/`。认证、CSRF、限流状态独立于路由；请求先沿用现有文本规范化规则，再通过固定版本 Ajv 的应用内 Schema 校验，返回明确的成功值或错误码与中文消息。未启用 Ajv 的 `$data` 动态引用选项。拒绝统计或无效统计同意不阻止有效预约，只移除预约归因；事件必须具有有效统计同意。
 
-`createInquiryService(repository)` 接收 `create(record)`、`findAll()`、`updateStatus(id, status, updatedAt)` 和 `remove(id)`；更新和删除返回记录是否存在。`createAnalyticsService(repository)` 接收原子批量写入方法 `insertBatch(events)`，负责队列、批量与重试；定时器仍由 `server.mjs` 管理。服务不调用文件系统，也不决定 HTTP 状态码。当前 `app.mjs` 提供串行 JSON 仓储适配器，后续 SQLite 仓储替换这些依赖。纯函数 `createDashboard(data, timeZone, now?)` 保持现有去重、转化率及报表时区口径。
+`createInquiryService(repository)` 接收 `create(record)`、`findAll()`、`updateStatus(id, status, updatedAt)` 和 `remove(id)`；更新和删除返回记录是否存在。`createAnalyticsService(repository)` 接收原子批量写入方法 `insertBatch(events)`，负责队列、批量与重试；定时器仍由 `server.mjs` 管理。服务不调用文件系统，也不决定 HTTP 状态码。`app.mjs` 注入 SQLite 仓储，运行时不读取或修改旧 JSON。纯函数 `createDashboard(data, timeZone, now?)` 保持现有去重、转化率及报表时区口径。
 
 ## 请求与数据流
 
@@ -45,7 +45,11 @@ tests/              unit、integration、e2e 与 fixtures
 
 SQLite 启用 WAL、外键约束和合理的 busy timeout。`db/` 负责连接选项、事务入口、迁移、健康检查和备份协调；其他层不得直接管理连接或绕过迁移。
 
-数据库基础接口为 `openDatabase(path)`、`migrate(db)` 和 `closeDatabase(db)`，使用 Node.js 24 内置 `node:sqlite`。连接启用 WAL、外键、5000ms busy timeout 和 NORMAL synchronous；`migrate` 返回当前版本，使用单个事务执行待应用迁移并记录 SHA-256 校验值。已应用迁移缺失或校验不符时拒绝继续；SQL 文件固定 LF 换行，禁止修改已应用迁移。此阶段运行时仍使用 JSON，仓储切换在后续任务完成。
+数据库基础接口为 `openDatabase(path)`、`migrate(db)` 和 `closeDatabase(db)`，使用 Node.js 24 内置 `node:sqlite`。连接启用 WAL、外键、5000ms busy timeout 和 NORMAL synchronous；`migrate` 返回当前版本，使用单个事务执行待应用迁移并记录 SHA-256 校验值。已应用迁移缺失或校验不符时拒绝继续；SQL 文件固定 LF 换行，禁止修改已应用迁移。`DATA_PATH` 现在指向 SQLite，默认 `data/site.db`。应用启动先迁移并清理过期事件，优雅退出在统计缓冲写入完成后关闭数据库。
+
+所有业务 SQL 与事务保存在 `repositories/`。预约状态变更和审计、删除和审计、每批统计、容量淘汰分别原子执行；容量淘汰同样生成无正文的删除审计。仓储把数据库列映射为现有 camelCase API 字段。事务使用可嵌套的同步 savepoint，让 JSON 导入覆盖全部业务记录，失败时统一回滚。
+
+`createSessionRepository(db)` 提供 `saveSession({ tokenHash, csrfTokenHash, role, createdAt, expiresAt })`、`findSession(tokenHash, now?)`、`deleteSession(tokenHash)`、`prune(now?)`；读取在到期边界删除记录并返回 `null`。此阶段认证仍使用内存会话，后续认证任务将注入该仓储实现重启后的会话恢复。
 
 业务时间使用 UTC ISO 8601 文本，会话创建和过期时间使用毫秒时间戳。会话仅存储令牌和 CSRF 令牌的 SHA-256 小写十六进制摘要。审计动作限定为 `inquiry_status_changed` 和 `inquiry_deleted`，JSON `payload` 仅允许枚举状态字段 `fromStatus`、`toStatus`；`inquiry_id` 不设外键，以便删除预约后保留不含个人信息正文的审计记录。
 

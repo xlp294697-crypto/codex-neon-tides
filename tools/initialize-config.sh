@@ -53,7 +53,7 @@ trap 'rm -f "$temporary"' EXIT INT TERM
   printf '%s\n' 'HOST=127.0.0.1'
   printf '%s\n' 'PORT=3002'
   printf '%s\n' 'APP_BIND_IP=127.0.0.1'
-  printf '%s\n' 'DATA_PATH=./data/site-data.json'
+  printf '%s\n' 'DATA_PATH=./data/site.db'
   printf '%s\n' 'MAX_BODY_BYTES=65536'
   printf '%s\n' 'EVENT_RETENTION_DAYS=180'
   printf '%s\n' 'MAX_EVENT_RECORDS=25000'

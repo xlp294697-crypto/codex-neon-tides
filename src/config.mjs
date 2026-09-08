@@ -51,7 +51,7 @@ function getPasswordProblem(password) {
 export function loadConfig(env, root) {
   const publicRoot = path.join(root, 'public');
   const dataPath = path.resolve(
-    env.DATA_PATH || path.join(root, 'data', 'site-data.json'),
+    env.DATA_PATH || path.join(root, 'data', 'site.db'),
   );
   const adminPassword = env.ADMIN_PASSWORD || '';
   const adminPasswordHash = env.ADMIN_PASSWORD_HASH || '';

@@ -1,17 +1,12 @@
-import { randomBytes, randomUUID } from 'node:crypto';
-import {
-  chmod,
-  copyFile,
-  lstat,
-  mkdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { chmod, lstat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { openDatabase, closeDatabase } from './db/database.mjs';
+import { migrate } from './db/migrate.mjs';
+import { createInquiryRepository } from './repositories/inquiry-repository.mjs';
+import { createAnalyticsRepository } from './repositories/analytics-repository.mjs';
+import { createSessionRepository } from './repositories/session-repository.mjs';
+import { transaction } from './repositories/transaction.mjs';
 import { HttpError } from './http/errors.mjs';
 import { createResponseHelpers } from './http/responses.mjs';
 import { createAuth } from './middleware/auth.mjs';
@@ -123,7 +118,10 @@ export function createApp(config) {
   } = config;
   const { readJson, sendBuffer, sendJson } = createResponseHelpers(config);
 
-  let dataQueue = Promise.resolve();
+  let db;
+  let inquiries;
+  let events;
+  let sessions;
   let dataHealthy = true;
 
   const auth = createAuth(config);
@@ -131,27 +129,39 @@ export function createApp(config) {
   const rateLimiter = createRateLimiter(config);
   const { buckets: rateBuckets, getRequestIp, hitRateLimit, clearRateLimit } = rateLimiter;
 
-  // Transitional JSON adapters keep persistence outside the services until the
-  // planned SQLite repositories replace this storage implementation.
+  function storageOperation(operation) {
+    try {
+      const result = operation();
+      dataHealthy = true;
+      return result;
+    } catch (error) {
+      dataHealthy = false;
+      throw error;
+    }
+  }
+
+  function pruneData() {
+    events.prune({
+      cutoff: new Date(Date.now() - EVENT_RETENTION_DAYS * 86400000).toISOString(),
+      maxRecords: MAX_EVENT_RECORDS,
+    });
+    inquiries.prune(MAX_INQUIRY_RECORDS);
+  }
+
   const inquiryService = createInquiryService({
-    create: (inquiry) => mutateData((data) => data.inquiries.unshift(inquiry)),
-    findAll: async () => (await readData()).inquiries,
-    updateStatus: (id, status, updatedAt) => mutateData((data) => {
-      const inquiry = data.inquiries.find((item) => item.id === id);
-      if (!inquiry) return false;
-      inquiry.status = status;
-      inquiry.updatedAt = updatedAt;
-      return true;
-    }),
-    remove: (id) => mutateData((data) => {
-      const index = data.inquiries.findIndex((item) => item.id === id);
-      if (index < 0) return false;
-      data.inquiries.splice(index, 1);
-      return true;
-    }),
+    create: (inquiry) => storageOperation(() => transaction(db, () => {
+      inquiries.create(inquiry);
+      pruneData();
+    })),
+    findAll: () => storageOperation(() => inquiries.findAll()),
+    updateStatus: (...args) => storageOperation(() => inquiries.updateStatus(...args)),
+    remove: (id) => storageOperation(() => inquiries.remove(id)),
   });
   const analyticsService = createAnalyticsService({
-    insertBatch: (batch) => mutateData((data) => data.events.push(...batch)),
+    insertBatch: (batch) => storageOperation(() => transaction(db, () => {
+      events.insertBatch(batch);
+      pruneData();
+    })),
   }, { onWriteFailure: () => { dataHealthy = false; } });
   const { flushEventBuffer, cancelScheduledEventFlush } = analyticsService;
 
@@ -169,88 +179,11 @@ export function createApp(config) {
     );
   }
 
-  async function ensureDataFile() {
-    await mkdir(path.dirname(DATA_PATH), { recursive: true });
-    try {
-      await stat(DATA_PATH);
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      await writeFile(
-        DATA_PATH,
-        JSON.stringify({ version: 1, events: [], inquiries: [] }, null, 2),
-        {
-          encoding: 'utf8',
-          flag: 'wx',
-          mode: 0o600,
-        },
-      );
-    }
-    if (process.platform !== 'win32') await chmod(DATA_PATH, 0o600);
-  }
-
-  async function readDataFromDisk() {
-    await ensureDataFile();
-    let data;
-    try {
-      data = JSON.parse(await readFile(DATA_PATH, 'utf8'));
-    } catch (error) {
-      dataHealthy = false;
-      throw new Error(`数据文件无法读取或不是有效 JSON：${error.message}`);
-    }
-    if (!Array.isArray(data.events)) data.events = [];
-    if (!Array.isArray(data.inquiries)) data.inquiries = [];
-    if (!data.version) data.version = 1;
-    dataHealthy = true;
-    return data;
-  }
-
-  async function atomicWriteData(data) {
-    const directory = path.dirname(DATA_PATH);
-    const temporary = path.join(
-      directory,
-      `.${path.basename(DATA_PATH)}.${process.pid}.${randomBytes(5).toString('hex')}.tmp`,
-    );
-    const payload = `${JSON.stringify(data, null, 2)}\n`;
-    try {
-      await writeFile(temporary, payload, { encoding: 'utf8', mode: 0o600 });
-      try {
-        await rename(temporary, DATA_PATH);
-      } catch (error) {
-        if (!['EPERM', 'EEXIST'].includes(error.code)) throw error;
-        await copyFile(temporary, DATA_PATH);
-      }
-      dataHealthy = true;
-    } catch (error) {
-      dataHealthy = false;
-      throw error;
-    } finally {
-      await rm(temporary, { force: true }).catch(() => undefined);
-    }
-  }
-
-  async function mutateData(mutator) {
-    const operation = dataQueue.then(async () => {
-      const data = await readDataFromDisk();
-      const cutoff = Date.now() - EVENT_RETENTION_DAYS * 86400000;
-      data.events = data.events.filter((event) => {
-        const timestamp = Date.parse(event.createdAt);
-        return !Number.isFinite(timestamp) || timestamp >= cutoff;
-      });
-      const result = await mutator(data);
-      if (data.events.length > MAX_EVENT_RECORDS)
-        data.events = data.events.slice(-MAX_EVENT_RECORDS);
-      if (data.inquiries.length > MAX_INQUIRY_RECORDS)
-        data.inquiries = data.inquiries.slice(0, MAX_INQUIRY_RECORDS);
-      await atomicWriteData(data);
-      return result;
-    });
-    dataQueue = operation.catch(() => undefined);
-    return operation;
-  }
-
-  async function readData() {
-    await dataQueue;
-    return readDataFromDisk();
+  function readData() {
+    return storageOperation(() => ({
+      events: events.findAll(),
+      inquiries: inquiries.findAll(),
+    }));
   }
 
   async function getSafeMedia(pathname) {
@@ -486,19 +419,36 @@ export function createApp(config) {
   }
 
   async function initialize() {
-    await ensureDataFile();
     await realpath(MEDIA_ROOT);
-    await mutateData(() => undefined);
+    try {
+      db = openDatabase(DATA_PATH);
+      if (process.platform !== 'win32') await chmod(DATA_PATH, 0o600);
+      migrate(db);
+      inquiries = createInquiryRepository(db);
+      events = createAnalyticsRepository(db);
+      sessions = createSessionRepository(db);
+      storageOperation(() => transaction(db, pruneData));
+      sessions.prune();
+    } catch (error) {
+      if (db?.isOpen) closeDatabase(db);
+      dataHealthy = false;
+      throw error;
+    }
   }
 
   function cleanupExpiredState() {
     rateLimiter.cleanupExpiredState();
     auth.cleanupExpiredState();
+    try {
+      storageOperation(() => sessions.prune());
+    } catch {
+      console.error(`[${new Date().toISOString()}] 过期会话清理失败。`);
+    }
   }
 
   async function runDataMaintenance() {
     try {
-      await mutateData(() => undefined);
+      storageOperation(() => transaction(db, pruneData));
     } catch (error) {
       dataHealthy = false;
       console.error(
@@ -511,6 +461,7 @@ export function createApp(config) {
   Object.defineProperty(handleRequest, 'lifecycle', {
     value: Object.freeze({
       initialize,
+      closeDatabase() { if (db?.isOpen) closeDatabase(db); },
       cleanupExpiredState,
       runDataMaintenance,
       flushEventBuffer,

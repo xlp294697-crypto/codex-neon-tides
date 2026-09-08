@@ -11,7 +11,7 @@ RUN mkdir -p /app/data && chown node:node /app/data
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3002 \
-    DATA_PATH=/app/data/site-data.json
+    DATA_PATH=/app/data/site.db
 
 USER node
 EXPOSE 3002
