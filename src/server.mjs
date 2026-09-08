@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApp } from './app.mjs';
 import { loadConfig } from './config.mjs';
+import { writeLog } from './logging.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -30,12 +31,7 @@ export function startServer(config) {
       eventFlushTimer = null;
       void app.lifecycle
         .flushEventBuffer()
-        .catch((error) =>
-          console.error(
-            `[${new Date().toISOString()}] 统计批量写入失败：`,
-            error,
-          ),
-        );
+        .catch(() => writeLog('error', 'ANALYTICS_FLUSH_FAILED'));
     }, delay);
     eventFlushTimer.unref();
   }
@@ -48,7 +44,7 @@ export function startServer(config) {
   async function shutdown(signal) {
     if (shutdownStarted) return;
     shutdownStarted = true;
-    console.log(`${signal}: stopping Jiuyue Sports...`);
+    writeLog('info', 'SERVER_SHUTDOWN_STARTED', { signal });
     clearInterval(rateLimitCleanup);
     clearInterval(dataMaintenance);
     cancelScheduledEventFlush();
@@ -60,9 +56,9 @@ export function startServer(config) {
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeIdleConnections?.();
       });
-    } catch (error) {
+    } catch {
       failed = true;
-      console.error('停止接收请求失败：', error);
+      writeLog('error', 'SERVER_CLOSE_FAILED');
     }
 
     let flushError = null;
@@ -73,21 +69,21 @@ export function startServer(config) {
         flushError = null;
       } catch (error) {
         flushError = error;
-        console.error(`停止前第 ${attempt} 次写入统计失败：`, error);
+        writeLog('error', 'SERVER_ANALYTICS_DRAIN_FAILED', { attempt });
       }
     }
     cancelScheduledEventFlush();
     if (flushError || app.lifecycle.eventBufferLength) {
       failed = true;
-      console.error(
-        `停止时仍有 ${app.lifecycle.eventBufferLength} 条统计事件未写入。`,
-      );
+      writeLog('error', 'SERVER_ANALYTICS_PENDING', {
+        pending: app.lifecycle.eventBufferLength,
+      });
     }
     try {
       app.lifecycle.closeDatabase();
-    } catch (error) {
+    } catch {
       failed = true;
-      console.error('关闭数据库失败：', error);
+      writeLog('error', 'DATABASE_CLOSE_FAILED');
     }
     if (failed) process.exitCode = 1;
     clearTimeout(forcedExit);
@@ -109,14 +105,13 @@ export function startServer(config) {
     dataMaintenance.unref();
 
     server.listen(config.port, config.host, () => {
-      console.log(
-        `Jiuyue Sports ${config.nodeEnv === 'production' ? 'production' : 'development'} server: http://${config.host}:${config.port}`,
-      );
-      console.log(`SQLite database: ${config.dataPath}`);
+      writeLog('info', 'SERVER_STARTED', {
+        environment:
+          config.nodeEnv === 'production' ? 'production' : 'development',
+        port: config.port,
+      });
       if (config.nodeEnv === 'production' && !config.cookieSecure) {
-        console.warn(
-          'WARNING: COOKIE_SECURE=false；只有在完全隔离的本机 HTTP 测试中才应使用。',
-        );
+        writeLog('warn', 'INSECURE_COOKIE_CONFIGURATION');
       }
     });
 

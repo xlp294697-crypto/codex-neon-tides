@@ -38,12 +38,7 @@ export function createAnalyticsService(
     });
     if (eventBuffer.length >= EVENT_BATCH_SIZE) {
       cancelScheduledEventFlush();
-      void flushEventBuffer().catch((error) =>
-        console.error(
-          `[${new Date().toISOString()}] 统计批量写入失败：`,
-          error,
-        ),
-      );
+      void flushEventBuffer().catch(() => undefined);
     } else scheduleEventFlush();
     return { ok: true };
   }

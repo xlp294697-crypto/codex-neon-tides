@@ -8,8 +8,12 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check src/config.mjs && node --check src/http/errors.mjs && node --check src/http/responses.mjs && node --check src/middleware/auth.mjs && node --check src/middleware/csrf.mjs && node --check src/middleware/rate-limit.mjs && node --check src/validation/common.mjs && node --check src/validation/inquiries.mjs && node --check src/validation/events.mjs && node --check src/services/dashboard-service.mjs && node --check src/services/inquiry-service.mjs && node --check src/services/analytics-service.mjs && node --check src/app.mjs && node --check src/server.mjs && node --check public/app.js && node --check public/admin.js",
+    "prestart": "node tools/require-node-24.mjs",
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "predev": "node tools/require-node-24.mjs",
+    "dev": "node --watch --env-file-if-exists=.env server.mjs",
+    "check:artifacts": "node tools/check-tracked-artifacts.mjs",
+    "check": "npm run check:artifacts && node --check server.mjs && node --check src/config.mjs && node --check src/http/errors.mjs && node --check src/http/responses.mjs && node --check src/logging.mjs && node --check src/middleware/auth.mjs && node --check src/middleware/csrf.mjs && node --check src/middleware/rate-limit.mjs && node --check src/validation/common.mjs && node --check src/validation/inquiries.mjs && node --check src/validation/events.mjs && node --check src/services/dashboard-service.mjs && node --check src/services/inquiry-service.mjs && node --check src/services/analytics-service.mjs && node --check src/app.mjs && node --check src/server.mjs && node --check tools/check-tracked-artifacts.mjs && node --check tools/require-node-24.mjs && node --check public/app.js && node --check public/admin.js",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier . --write",
     "format:check": "prettier . --check",

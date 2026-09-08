@@ -111,9 +111,13 @@ test('首页包含预约、独立同意与正确联系方式', async () => {
     app.includes("sourcePage: analyticsAllowed ? location.pathname : ''"),
   );
   assert.ok(app.includes('utm: analyticsAllowed ? campaignContext() : {}'));
-  const bookingHandler = app.slice(
-    app.indexOf("document.querySelector('#booking-form')"),
+  const bookingHandlerStart = app.indexOf(".querySelector('#booking-form')");
+  assert.notEqual(
+    bookingHandlerStart,
+    -1,
+    '预约提交处理器必须存在，后续隐私断言不能对空切片通过',
   );
+  const bookingHandler = app.slice(bookingHandlerStart);
   assert.equal(
     bookingHandler.includes('visitorId:'),
     false,

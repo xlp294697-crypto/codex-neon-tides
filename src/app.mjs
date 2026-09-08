@@ -18,6 +18,7 @@ import { validateEvent } from './validation/events.mjs';
 import { createDashboard } from './services/dashboard-service.mjs';
 import { createInquiryService } from './services/inquiry-service.mjs';
 import { createAnalyticsService } from './services/analytics-service.mjs';
+import { writeLog } from './logging.mjs';
 
 const STATIC_FILES = new Map([
   [
@@ -152,7 +153,7 @@ export function createApp(config) {
     }
   }
 
-  function probeBusinessStorage() {
+  function probeCoreBusinessStorage() {
     // Fixed synthetic rows only; the caller always rolls back this SAVEPOINT.
     // Exercise table-specific write failures without retaining failed requests.
     db.exec(`
@@ -161,10 +162,6 @@ export function createApp(config) {
       VALUES ('__readiness_probe__', '2000-01-01T00:00:00.000Z', '[health probe]',
         '+1-202-555-0100', 'synthetic', 'synthetic', 'synthetic', '2000-01-01T00:00:00.000Z');
       UPDATE inquiries SET status = 'Contacted' WHERE id = '__readiness_probe__';
-      INSERT INTO analytics_events
-        (id, created_at, event_type, page, visitor_id, analytics_consent_at, analytics_notice_version)
-      VALUES ('__readiness_probe__', '2000-01-01T00:00:00.000Z', 'page_view',
-        '/', '__readiness_probe__', '2000-01-01T00:00:00.000Z', 'synthetic');
       INSERT INTO admin_sessions (token_hash, csrf_token_hash, created_at, expires_at)
       VALUES ('0000000000000000000000000000000000000000000000000000000000000000',
         '0000000000000000000000000000000000000000000000000000000000000000', 0, 1);
@@ -173,20 +170,22 @@ export function createApp(config) {
       INSERT INTO audit_logs (id, created_at, action, inquiry_id)
       VALUES ('__readiness_probe__', '2000-01-01T00:00:00.000Z', 'inquiry_deleted', '__readiness_probe__');
       DELETE FROM inquiries WHERE id = '__readiness_probe__';
-      DELETE FROM analytics_events WHERE id = '__readiness_probe__';
       DELETE FROM admin_sessions
         WHERE token_hash = '0000000000000000000000000000000000000000000000000000000000000000';
       DELETE FROM audit_logs WHERE id = '__readiness_probe__';
     `);
   }
 
-  function pruneData() {
+  function pruneAnalytics() {
     events.prune({
       cutoff: new Date(
         Date.now() - EVENT_RETENTION_DAYS * 86400000,
       ).toISOString(),
       maxRecords: MAX_EVENT_RECORDS,
     });
+  }
+
+  function pruneInquiries() {
     inquiries.prune(MAX_INQUIRY_RECORDS);
   }
 
@@ -195,7 +194,7 @@ export function createApp(config) {
       storageOperation(() =>
         transaction(db, () => {
           inquiries.create(inquiry);
-          pruneData();
+          pruneInquiries();
         }),
       ),
     findAll: () => storageOperation(() => inquiries.findAll()),
@@ -206,17 +205,13 @@ export function createApp(config) {
   const analyticsService = createAnalyticsService(
     {
       insertBatch: (batch) =>
-        storageOperation(() =>
-          transaction(db, () => {
-            events.insertBatch(batch);
-            pruneData();
-          }),
-        ),
+        transaction(db, () => {
+          events.insertBatch(batch);
+          pruneAnalytics();
+        }),
     },
     {
-      onWriteFailure: () => {
-        dataHealthy = false;
-      },
+      onWriteFailure: () => writeLog('error', 'ANALYTICS_FLUSH_FAILED'),
     },
   );
   const { flushEventBuffer, cancelScheduledEventFlush } = analyticsService;
@@ -326,7 +321,7 @@ export function createApp(config) {
         try {
           db.prepare('SELECT version FROM schema_migrations LIMIT 1').get();
           db.exec('UPDATE schema_migrations SET applied_at = applied_at');
-          if (!dataHealthy) probeBusinessStorage();
+          if (!dataHealthy) probeCoreBusinessStorage();
         } finally {
           db.exec('ROLLBACK TO readiness_probe; RELEASE readiness_probe');
         }
@@ -504,12 +499,9 @@ export function createApp(config) {
     } catch (error) {
       const { status, body } = safeApiError(error, req.requestId);
       if (status >= 500)
-        console.error(
-          JSON.stringify({
-            requestId: req.requestId,
-            category: body.error.code,
-          }),
-        );
+        writeLog('error', 'HTTP_INTERNAL_ERROR', {
+          requestId: req.requestId,
+        });
       if (!res.headersSent) sendJson(req, res, status, body);
       else res.destroy();
     }
@@ -524,8 +516,13 @@ export function createApp(config) {
       inquiries = createInquiryRepository(db);
       events = createAnalyticsRepository(db);
       sessions = createSessionRepository(db);
-      storageOperation(() => transaction(db, pruneData));
-      sessions.prune();
+      storageOperation(() => transaction(db, pruneInquiries));
+      try {
+        transaction(db, pruneAnalytics);
+      } catch {
+        writeLog('error', 'ANALYTICS_RETENTION_FAILED');
+      }
+      storageOperation(() => sessions.prune());
     } catch (error) {
       if (db?.isOpen) closeDatabase(db);
       dataHealthy = false;
@@ -538,19 +535,20 @@ export function createApp(config) {
     try {
       auth.cleanupExpiredState();
     } catch {
-      console.error(`[${new Date().toISOString()}] 过期会话清理失败。`);
+      writeLog('error', 'SESSION_MAINTENANCE_FAILED');
     }
   }
 
   async function runDataMaintenance() {
     try {
-      storageOperation(() => transaction(db, pruneData));
-    } catch (error) {
-      dataHealthy = false;
-      console.error(
-        `[${new Date().toISOString()}] 数据保留期限清理失败：`,
-        error,
-      );
+      storageOperation(() => transaction(db, pruneInquiries));
+    } catch {
+      writeLog('error', 'INQUIRY_RETENTION_FAILED');
+    }
+    try {
+      transaction(db, pruneAnalytics);
+    } catch {
+      writeLog('error', 'ANALYTICS_RETENTION_FAILED');
     }
   }
 

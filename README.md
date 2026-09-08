@@ -243,76 +243,21 @@ data/site.db
 
 旧 JSON 导入步骤、只读预检和数量核对见[运维指南](docs/operations.md#生产切换)。`DATA_PATH` 必须指向新的 SQLite 路径；旧实例数据需要显式导入，不能直接把 JSON 当数据库打开。
 
-### 旧 JSON 版本备份与恢复（仅用于迁移前）
+### SQLite 备份与恢复
 
-以下旧脚本仍处理 JSON，不能备份或恢复当前 SQLite 数据库。SQLite 在线备份与恢复工具将在后续运维任务补齐；正式切换前必须完成对应演练。
-
-Windows 备份：
-
-```powershell
-.\tools\Backup-Data.ps1
-# 可选：改为保留 180 天
-.\tools\Backup-Data.ps1 -RetentionDays 180
-```
-
-Linux 原生备份（必须使用网站服务账户，避免权限错位）：
+当前运行数据必须使用 SQLite 专用工具处理。旧 JSON 脚本只供迁移旧版本数据时识别历史包，不能用于当前数据库。完整参数、停止应用要求和演练流程见[运维指南](docs/operations.md)。以下命令创建并立即验证在线备份，并默认保留 90 天：
 
 ```bash
-sudo -u jiuyue /bin/sh /opt/jiuyue-sports/tools/backup-data.sh
-# 可选的第二个参数是保留天数
-sudo -u jiuyue /bin/sh /opt/jiuyue-sports/tools/backup-data.sh /opt/jiuyue-sports/backups 180
+node tools/backup-sqlite.mjs --database ./data/site.db --directory ./backups --retention-days 90
 ```
 
-Docker 备份：
-
-```powershell
-.\tools\Backup-Docker-Data.ps1
-# app-only 模式显式指定对应 Compose 文件
-.\tools\Backup-Docker-Data.ps1 -ComposeFile .\compose.app-only.yaml
-```
-
-或：
+恢复前必须停止应用；恢复工具默认校验配套 SHA-256、SQLite 完整性、外键和迁移兼容性，并先在 `pre-restore-backups/` 创建当前数据库安全副本：
 
 ```bash
-./tools/backup-docker-data.sh ./compose.yaml
-# app-only 模式
-./tools/backup-docker-data.sh ./compose.app-only.yaml
+node tools/restore-sqlite.mjs --backup ./backups/jiuyue-时间戳-标识.db --database ./data/site.db --application-stopped
 ```
 
-每次备份都会生成 JSON 和同名 SHA-256 文件，校验文件只记录可移动的文件名，不记录原服务器绝对路径。脚本默认轮换 90 天以前的本包备份；PowerShell 用 `-RetentionDays` 调整，Shell 用第二/第三个位置参数或已导出的 `BACKUP_RETENTION_DAYS` 调整。Windows 脚本会把备份 ACL 限制为当前账户、SYSTEM 和管理员组，Linux 脚本使用 `0600` 文件与 `0700` 目录。至少把备份再复制到一处不与网站服务器共盘的位置，并定期实际演练恢复。备份含家长电话等个人信息，必须在支持访问控制的加密介质中保存。收到个人信息删除请求时，先删除在线记录并登记待处理范围，让相关记录随过期备份销毁；如果在此之前执行灾难恢复，必须重新执行删除清单，不能让已删除记录恢复为日常可用数据。
-
-恢复脚本默认要求同名 `.sha256.txt` 并在替换前校验；只有明确接受完整性风险时才使用 `-SkipHashCheck` 或 `--skip-hash-check`。原生恢复会先为当前数据创建带哈希的安全副本。Windows 计划任务方式：
-
-```powershell
-Stop-ScheduledTask -TaskName JiuyueSportsWebsite
-.\tools\Restore-Data.ps1 -BackupFile .\backups\site-data-YYYYMMDD-HHMMSS.json
-Start-ScheduledTask -TaskName JiuyueSportsWebsite
-```
-
-Linux 原生方式必须始终以 `jiuyue` 账户写回数据：
-
-```bash
-sudo systemctl stop jiuyue-sports
-sudo -u jiuyue /bin/sh /opt/jiuyue-sports/tools/restore-data.sh \
-  /opt/jiuyue-sports/backups/site-data-YYYYMMDD-HHMMSS.json
-sudo systemctl start jiuyue-sports
-curl -fsS http://127.0.0.1:3002/api/health
-```
-
-Docker 恢复由脚本完成“哈希校验—当前数据安全副本—停止 app—以容器 `node` 所有权替换—重启—健康检查”：
-
-```powershell
-.\tools\Restore-Docker-Data.ps1 -BackupFile .\backups\site-data-docker-YYYYMMDD-HHMMSS.json
-# app-only 模式
-.\tools\Restore-Docker-Data.ps1 -BackupFile .\backups\site-data-docker-YYYYMMDD-HHMMSS.json `
-  -ComposeFile .\compose.app-only.yaml
-```
-
-```bash
-./tools/restore-docker-data.sh ./backups/site-data-docker-YYYYMMDD-HHMMSS.json ./compose.yaml
-```
-
-不要在应用仍写入数据时手工覆盖文件。`docker compose down` 不会删除命名卷，但 **绝对不要使用 `docker compose down -v`**，也不要在没有可恢复备份时执行带卷清理的 `docker system prune`；这些操作会删除询盘数据卷，`-v` 还会删除 Caddy 证书卷。
+不要手工复制单个 WAL 模式数据库文件，也不要提交任何 `.db`、`-wal`、`-shm`、发布恢复点或恢复前快照。至少把一份已验证备份复制到服务器之外的受控加密存储，并按月实际演练恢复。
 
 ## 上线前测试
 

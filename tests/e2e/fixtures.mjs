@@ -51,8 +51,11 @@ export const test = base.extend({
       }
       if (handler) {
         handler.lifecycle.cancelScheduledEventFlush();
-        await handler.lifecycle.flushEventBuffer();
-        handler.lifecycle.closeDatabase();
+        try {
+          await handler.lifecycle.flushEventBuffer();
+        } finally {
+          handler.lifecycle.closeDatabase();
+        }
       }
     }
     function storage(operation) {

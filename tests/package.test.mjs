@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { lstat, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
+import { once } from 'node:events';
 import { httpFixture } from './fixtures/http-app.mjs';
 import { openDatabase } from '../src/db/database.mjs';
 
@@ -41,6 +43,129 @@ test('runtime image installs locked production packages and excludes delivery to
   const ignored = await readFile(path.join(root, '.dockerignore'), 'utf8');
   assert.match(ignored, /^\*\*$/m);
   assert.match(ignored, /^!src\/\*\*$/m);
+});
+
+test('generated SQLite snapshots are ignored at any depth and tracked artifacts are guarded', async () => {
+  const candidates = [
+    'nested/recovery/site.db',
+    'data/site.db-wal',
+    'runtime/release-backups/release.db',
+    'runtime/pre-restore-backups/safety.db-shm',
+    'nested/snapshots/site.sqlite-wal',
+  ];
+  const ignored = spawnSync('git', ['check-ignore', '--stdin'], {
+    cwd: root,
+    input: candidates.join('\n'),
+    encoding: 'utf8',
+  });
+  assert.equal(ignored.status, 0, ignored.stderr);
+  assert.deepEqual(
+    ignored.stdout.trim().split(/\r?\n/).sort(),
+    candidates.sort(),
+  );
+  const guard = spawnSync(
+    process.execPath,
+    ['tools/check-tracked-artifacts.mjs'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(guard.status, 0, guard.stderr);
+});
+
+test('clean-checkout launcher loads .env and the development command enables watch mode', async (t) => {
+  const packageJson = JSON.parse(
+    await readFile(path.join(root, 'package.json'), 'utf8'),
+  );
+  assert.equal(
+    packageJson.scripts.start,
+    'node --env-file-if-exists=.env server.mjs',
+  );
+  assert.equal(
+    packageJson.scripts.dev,
+    'node --watch --env-file-if-exists=.env server.mjs',
+  );
+  const versionCheck = spawnSync(
+    process.execPath,
+    ['tools/require-node-24.mjs'],
+    {
+      cwd: root,
+      encoding: 'utf8',
+    },
+  );
+  assert.equal(versionCheck.status, 0, versionCheck.stderr);
+
+  const probe = createServer();
+  probe.listen(0, '127.0.0.1');
+  await once(probe, 'listening');
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  const environmentPath = path.join(root, '.env');
+  try {
+    await writeFile(
+      environmentPath,
+      [
+        'NODE_ENV=test',
+        'HOST=127.0.0.1',
+        `PORT=${port}`,
+        'DATA_PATH=./data/dev-launch-test.db',
+        `${'ADMIN'}_PASSWORD=Synthetic!Launcher934Key`,
+        'SESSION_SECRET=synthetic-launcher-secret-at-least-thirty-two-characters',
+        'COOKIE_SECURE=false',
+      ].join('\n'),
+      { flag: 'wx' },
+    );
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      t.skip('Existing local .env is never overwritten by the launcher test');
+      return;
+    }
+    throw error;
+  }
+  const childEnvironment = { ...process.env };
+  for (const key of [
+    'NODE_ENV',
+    'HOST',
+    'PORT',
+    'DATA_PATH',
+    'ADMIN_PASSWORD',
+    'ADMIN_PASSWORD_HASH',
+    'SESSION_SECRET',
+    'COOKIE_SECURE',
+  ])
+    delete childEnvironment[key];
+  const child = spawn(
+    process.execPath,
+    ['--env-file-if-exists=.env', 'server.mjs'],
+    { cwd: root, env: childEnvironment, stdio: 'ignore' },
+  );
+  t.after(async () => {
+    if (child.exitCode === null) child.kill('SIGTERM');
+    await Promise.race([
+      once(child, 'exit'),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+    await unlink(environmentPath).catch(() => undefined);
+    for (const suffix of ['', '-wal', '-shm'])
+      await unlink(
+        path.join(root, 'data', `dev-launch-test.db${suffix}`),
+      ).catch(() => undefined);
+  });
+  const deadline = Date.now() + 8000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    try {
+      ready = (await fetch(`http://127.0.0.1:${port}/api/health`)).ok;
+      if (ready) break;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(
+    ready,
+    true,
+    '.env values must start a ready development server',
+  );
 });
 
 test('staging and production isolate state and expose only the hardened edge', async () => {
@@ -147,7 +272,7 @@ test('readiness recovers from a business write failure without background cleanu
   );
 });
 
-for (const table of ['analytics_events', 'admin_sessions', 'audit_logs']) {
+for (const table of ['admin_sessions', 'audit_logs']) {
   test(`recovery stays unready while ${table} rejects writes`, async (t) => {
     t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     const fixture = await httpFixture(t);
@@ -270,6 +395,15 @@ test('交付包不含凭据、原始资料、日志或本机路径', async () =>
     '.ndjson',
     '.log',
     '.zip',
+    '.db',
+    '.db-wal',
+    '.db-shm',
+    '.sqlite',
+    '.sqlite-wal',
+    '.sqlite-shm',
+    '.sqlite3',
+    '.sqlite3-wal',
+    '.sqlite3-shm',
   ]) {
     assert.equal(
       files.some((file) => file.toLowerCase().endsWith(extension)),

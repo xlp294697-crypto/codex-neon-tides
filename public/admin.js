@@ -119,6 +119,12 @@ function formatDate(value) {
     minute: '2-digit',
   }).format(new Date(value));
 }
+function maskPhone(value) {
+  const phone = String(value || '');
+  if (!phone) return '未填写';
+  if (phone.length <= 7) return `${phone.slice(0, 2)}***${phone.slice(-2)}`;
+  return `${phone.slice(0, 3)}****${phone.slice(-4)}`;
+}
 const statusLabels = {
   New: '新线索',
   Contacted: '已联系',
@@ -138,7 +144,7 @@ function renderInquiries() {
           const preferredTime =
             inquiry.preferredTime || inquiry.volume || '未填写';
           const concern = inquiry.concern || inquiry.message || '未填写';
-          return `<tr><td>${formatDate(inquiry.createdAt)}</td><td><strong>${escapeHtml(parentName)}</strong><br><a href="tel:${escapeHtml(inquiry.phone)}">${escapeHtml(inquiry.phone || '未填写')}</a></td><td>${escapeHtml(grade)}</td><td><strong>${escapeHtml(course)}</strong></td><td>${escapeHtml(preferredTime)}</td><td class="requirement">${escapeHtml(concern)}</td><td>${escapeHtml(inquiry.source || '未采集')}<br><small>${escapeHtml(inquiry.sourcePage || '—')}</small></td><td><select class="status-select" data-id="${inquiry.id}">${Object.keys(
+          return `<tr><td>${formatDate(inquiry.createdAt)}</td><td><strong>${escapeHtml(parentName)}</strong><br><span class="phone-value">${escapeHtml(maskPhone(inquiry.phone))}</span>${inquiry.phone ? `<br><button class="reveal-phone" type="button" data-phone-id="${escapeHtml(inquiry.id)}">显示电话</button>` : ''}</td><td>${escapeHtml(grade)}</td><td><strong>${escapeHtml(course)}</strong></td><td>${escapeHtml(preferredTime)}</td><td class="requirement">${escapeHtml(concern)}</td><td>${escapeHtml(inquiry.source || '未采集')}<br><small>${escapeHtml(inquiry.sourcePage || '—')}</small></td><td><select class="status-select" data-id="${inquiry.id}">${Object.keys(
             statusLabels,
           )
             .map(
@@ -166,6 +172,18 @@ function renderInquiries() {
       } catch (error) {
         alert(error.message);
       }
+    }),
+  );
+  rows.querySelectorAll('.reveal-phone').forEach((button) =>
+    button.addEventListener('click', () => {
+      const inquiry = inquiries.find(
+        (item) => item.id === button.dataset.phoneId,
+      );
+      if (!inquiry?.phone) return;
+      const cell = button.closest('td');
+      cell.querySelector('.phone-value').innerHTML =
+        `<a href="tel:${escapeHtml(inquiry.phone)}">${escapeHtml(inquiry.phone)}</a>`;
+      button.remove();
     }),
   );
   rows.querySelectorAll('.delete-inquiry').forEach((button) =>

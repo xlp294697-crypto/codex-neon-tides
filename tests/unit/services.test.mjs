@@ -78,12 +78,14 @@ test('failed inquiry persistence rejects creation instead of reporting success',
 
 test('analytics service requeues failed batches and drains them once without losing event identity', async () => {
   const stored = [];
+  const attemptedIds = [];
   const delays = [];
   let fail = true;
   let unhealthy = false;
   const service = createAnalyticsService(
     {
       async insertBatch(batch) {
+        attemptedIds.push(batch.map((item) => item.id));
         if (fail) throw new Error('unavailable');
         stored.push(...batch);
       },
@@ -125,6 +127,7 @@ test('analytics service requeues failed batches and drains them once without los
   assert.equal(stored.length, 1);
   assert.equal(stored[0].eventType, 'page_view');
   assert.equal(stored[0].visitorId, 'visitor-test');
+  assert.equal(stored[0].id, attemptedIds[0][0]);
   assert.equal(typeof stored[0].id, 'string');
   assert.equal(Number.isFinite(Date.parse(stored[0].createdAt)), true);
 });

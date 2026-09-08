@@ -17,6 +17,12 @@ test('admin updates survive restart, deletion persists and logout revokes APIs',
     .locator('#inquiry-rows tr')
     .filter({ hasText: 'Synthetic Parent' });
   await expect(row).toHaveCount(1);
+  await expect(row).toContainText('000****0000');
+  await expect(row).not.toContainText('00000000000');
+  await expect(row.locator('a[href^="tel:"]')).toHaveCount(0);
+  await row.getByRole('button', { name: '显示电话' }).click();
+  await expect(row).toContainText('00000000000');
+  await expect(row.locator('a[href="tel:00000000000"]')).toHaveCount(1);
   const status = row.locator('.status-select');
   await expect(status).toHaveValue('New');
   const updated = page.waitForResponse(
