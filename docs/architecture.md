@@ -45,6 +45,10 @@ tests/              unit、integration、e2e 与 fixtures
 
 SQLite 启用 WAL、外键约束和合理的 busy timeout。`db/` 负责连接选项、事务入口、迁移、健康检查和备份协调；其他层不得直接管理连接或绕过迁移。
 
+数据库基础接口为 `openDatabase(path)`、`migrate(db)` 和 `closeDatabase(db)`，使用 Node.js 24 内置 `node:sqlite`。连接启用 WAL、外键、5000ms busy timeout 和 NORMAL synchronous；`migrate` 返回当前版本，使用单个事务执行待应用迁移并记录 SHA-256 校验值。已应用迁移缺失或校验不符时拒绝继续；SQL 文件固定 LF 换行，禁止修改已应用迁移。此阶段运行时仍使用 JSON，仓储切换在后续任务完成。
+
+业务时间使用 UTC ISO 8601 文本，会话创建和过期时间使用毫秒时间戳。会话仅存储令牌和 CSRF 令牌的 SHA-256 小写十六进制摘要。审计动作限定为 `inquiry_status_changed` 和 `inquiry_deleted`，JSON `payload` 仅允许枚举状态字段 `fromStatus`、`toStatus`；`inquiry_id` 不设外键，以便删除预约后保留不含个人信息正文的审计记录。
+
 主要表为：
 
 - `inquiries`：预约内容、状态、时间、隐私告知版本和统计归因许可；
