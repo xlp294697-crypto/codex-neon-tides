@@ -49,7 +49,7 @@ docker compose --env-file .env.production -f compose.production.yaml up -d --wai
 
 监控首页、健康接口、数据库读写、磁盘空间、容器重启、证书期限和备份结果。健康检查区分进程存活和依赖就绪；数据库无法读写时，就绪检查必须失败，避免继续接收生产流量。系统正常时保持安静，仅在故障或需人工处理时告警。
 
-`GET /api/health/live` 返回 `live: true` 只说明 HTTP 进程能响应，不依赖数据库。`GET /api/health` 是就绪检查：成功响应含 `live: true`、`ready: true`、`database: "ready"`；它执行 SQLite 读取及 SAVEPOINT 内真实更新，随后回滚，不改变迁移记录。关闭、锁定、只读或写入失败时返回安全的 503 错误封装，不泄露数据库细节。已有业务存储故障标记仍会阻止就绪，成功业务存储操作可清除该标记。
+`GET /api/health/live` 返回 `live: true` 只说明 HTTP 进程能响应，不依赖数据库。`GET /api/health` 是就绪检查：成功响应含 `live: true`、`ready: true`、`database: "ready"`；它执行 SQLite 读取及 SAVEPOINT 内真实更新，随后回滚，不改变迁移记录。关闭、锁定、只读或写入失败时返回安全的 503 错误封装，不泄露数据库细节。业务存储失败后，就绪检查最多每 5 秒尝试一次固定的恢复探测，在同一个回滚 SAVEPOINT 中对预约、统计、会话和审计表执行最小合法的虚构写入；仍有表级写入故障则继续返回 503。探测成功并完整回滚后清除故障标记，无需普通请求或后台清理恢复服务。无关业务操作成功不会清除故障标记；探测不保留用户数据、不重试失败的用户请求、不提交测试行。
 
 镜像默认执行 `node deploy/healthcheck.mjs readiness`；需要单独检查进程时执行 `node deploy/healthcheck.mjs liveness`。脚本读取容器 `PORT`，超时或无效响应返回非零，不打印响应和秘密。Docker 每 30 秒检查、连续 3 次失败标记 unhealthy；Compose 启动时等待应用健康。Caddy 每 10 秒检查就绪状态，失败后停用上游，恢复后重新接入；检查之间存在短暂延迟。单纯 unhealthy 不会触发 Docker 的 restart 策略，须配合监控与人工处置，禁止把重启策略当作数据库修复机制。
 

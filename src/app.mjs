@@ -123,6 +123,7 @@ export function createApp(config) {
   let events;
   let sessions;
   let dataHealthy = true;
+  let storageRecoveryAt = 0;
 
   const auth = createAuth(config, {
     saveSession: (session) =>
@@ -144,13 +145,39 @@ export function createApp(config) {
 
   function storageOperation(operation) {
     try {
-      const result = operation();
-      dataHealthy = true;
-      return result;
+      return operation();
     } catch (error) {
       dataHealthy = false;
       throw error;
     }
+  }
+
+  function probeBusinessStorage() {
+    // Fixed synthetic rows only; the caller always rolls back this SAVEPOINT.
+    // Exercise table-specific write failures without retaining failed requests.
+    db.exec(`
+      INSERT INTO inquiries
+        (id, created_at, parent_name, phone, grade, course, privacy_notice_version, privacy_consent_at)
+      VALUES ('__readiness_probe__', '2000-01-01T00:00:00.000Z', '[health probe]',
+        '+1-202-555-0100', 'synthetic', 'synthetic', 'synthetic', '2000-01-01T00:00:00.000Z');
+      UPDATE inquiries SET status = 'Contacted' WHERE id = '__readiness_probe__';
+      INSERT INTO analytics_events
+        (id, created_at, event_type, page, visitor_id, analytics_consent_at, analytics_notice_version)
+      VALUES ('__readiness_probe__', '2000-01-01T00:00:00.000Z', 'page_view',
+        '/', '__readiness_probe__', '2000-01-01T00:00:00.000Z', 'synthetic');
+      INSERT INTO admin_sessions (token_hash, csrf_token_hash, created_at, expires_at)
+      VALUES ('0000000000000000000000000000000000000000000000000000000000000000',
+        '0000000000000000000000000000000000000000000000000000000000000000', 0, 1);
+      UPDATE admin_sessions SET expires_at = 2
+        WHERE token_hash = '0000000000000000000000000000000000000000000000000000000000000000';
+      INSERT INTO audit_logs (id, created_at, action, inquiry_id)
+      VALUES ('__readiness_probe__', '2000-01-01T00:00:00.000Z', 'inquiry_deleted', '__readiness_probe__');
+      DELETE FROM inquiries WHERE id = '__readiness_probe__';
+      DELETE FROM analytics_events WHERE id = '__readiness_probe__';
+      DELETE FROM admin_sessions
+        WHERE token_hash = '0000000000000000000000000000000000000000000000000000000000000000';
+      DELETE FROM audit_logs WHERE id = '__readiness_probe__';
+    `);
   }
 
   function pruneData() {
@@ -290,17 +317,20 @@ export function createApp(config) {
       (req.method === 'GET' || req.method === 'HEAD') &&
       pathname === '/api/health'
     ) {
-      if (!dataHealthy)
+      if (!dataHealthy && Date.now() < storageRecoveryAt)
         throw new HttpError(503, '服务暂时不可用，请稍后再试。');
+      if (!dataHealthy) storageRecoveryAt = Date.now() + 5000;
       try {
         // Exercise a real database write without persisting any probe data.
         db.exec('SAVEPOINT readiness_probe');
         try {
           db.prepare('SELECT version FROM schema_migrations LIMIT 1').get();
           db.exec('UPDATE schema_migrations SET applied_at = applied_at');
+          if (!dataHealthy) probeBusinessStorage();
         } finally {
           db.exec('ROLLBACK TO readiness_probe; RELEASE readiness_probe');
         }
+        dataHealthy = true;
       } catch {
         throw new HttpError(503, '服务暂时不可用，请稍后再试。');
       }

@@ -9,6 +9,25 @@ import { openDatabase } from '../src/db/database.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
+function composeList(service, key) {
+  const blocks = [
+    ...service.matchAll(
+      new RegExp(`^    ${key}:\\r?\\n((?:      - .+\\r?\\n)+)`, 'gm'),
+    ),
+  ];
+  assert.equal(blocks.length, 1, `Expected one explicit ${key} list`);
+  return blocks[0][1]
+    .trim()
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .trim()
+        .slice(2)
+        .replace(/^["']|["']$/g, ''),
+    )
+    .sort();
+}
+
 test('runtime image installs locked production packages and excludes delivery tooling', async () => {
   const dockerfile = await readFile(path.join(root, 'Dockerfile'), 'utf8');
   assert.match(dockerfile, /FROM node:24-alpine[\d.]*@sha256:[a-f0-9]{64}/);
@@ -39,17 +58,19 @@ test('staging and production isolate state and expose only the hardened edge', a
     const [app, caddy] = compose.split('  caddy:');
     for (const service of [app, caddy]) {
       assert.match(service, /read_only: true/);
-      assert.match(service, /cap_drop:\s+- ALL/);
+      assert.deepEqual(composeList(service, 'cap_drop'), ['ALL']);
       assert.match(service, /no-new-privileges:true/);
     }
     assert.doesNotMatch(app, /ports:|build:/);
     assert.doesNotMatch(app, /cap_add:/);
     assert.match(caddy, /user: "1000:1000"/);
-    assert.match(caddy, /cap_add:\s+- NET_BIND_SERVICE/);
+    assert.deepEqual(composeList(caddy, 'cap_add'), ['NET_BIND_SERVICE']);
     assert.match(app, /APP_IMAGE:\?/);
-    assert.match(caddy, /"80:80\/tcp"/);
-    assert.match(caddy, /"443:443\/tcp"/);
-    assert.match(caddy, /"443:443\/udp"/);
+    assert.deepEqual(composeList(caddy, 'ports'), [
+      '443:443/tcp',
+      '443:443/udp',
+      '80:80/tcp',
+    ]);
   }
 });
 
@@ -62,6 +83,105 @@ function healthcheck(port, mode) {
     });
     child.on('error', reject);
     child.on('exit', resolve);
+  });
+}
+
+test('readiness recovers from a business write failure without background cleanup or persisting the failed request', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const fixture = await httpFixture(t);
+  const db = openDatabase(fixture.config.dataPath);
+  fixture.onCleanup(() => db.close());
+  db.exec(
+    "CREATE TRIGGER reject_inquiry BEFORE INSERT ON inquiries BEGIN SELECT RAISE(ABORT, 'synthetic transient business fault'); END",
+  );
+  const failed = await fixture.request('/api/inquiries', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      parentName: 'Synthetic parent',
+      phone: '+1-202-555-0100',
+      grade: 'test',
+      course: 'test',
+      privacyConsent: true,
+    }),
+  });
+  assert.equal(failed.response.status, 500);
+  await fixture.login();
+  assert.equal((await fixture.request('/api/health')).response.status, 503);
+  t.mock.timers.tick(5000);
+  assert.equal(
+    (await fixture.request('/api/health')).response.status,
+    503,
+    'A live business fault must remain unready',
+  );
+  db.exec('DROP TRIGGER reject_inquiry');
+  const history = db.prepare('SELECT * FROM schema_migrations').all();
+  db.exec(
+    "CREATE TRIGGER recovery_side_effect AFTER INSERT ON inquiries BEGIN UPDATE schema_migrations SET applied_at = '2099-01-01T00:00:00.000Z'; END",
+  );
+  assert.equal(
+    (await fixture.request('/api/health')).response.status,
+    503,
+    'Recovery attempts must be rate bounded',
+  );
+  t.mock.timers.tick(5000);
+  const recovered = await fixture.request('/api/health');
+  assert.equal(recovered.response.status, 200);
+  assert.equal(recovered.body.ready, true);
+  assert.deepEqual(
+    db.prepare('SELECT * FROM schema_migrations').all(),
+    history,
+  );
+  assert.equal(
+    db.prepare('SELECT count(*) AS count FROM admin_sessions').get().count,
+    1,
+  );
+  assert.equal(
+    db.prepare('SELECT count(*) AS count FROM inquiries').get().count,
+    0,
+    'Readiness must not commit the failed user request',
+  );
+  assert.equal(
+    db.prepare('SELECT count(*) AS count FROM audit_logs').get().count,
+    0,
+  );
+});
+
+for (const table of ['analytics_events', 'admin_sessions', 'audit_logs']) {
+  test(`recovery stays unready while ${table} rejects writes`, async (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const fixture = await httpFixture(t);
+    const db = openDatabase(fixture.config.dataPath);
+    fixture.onCleanup(() => db.close());
+    db.exec(
+      "CREATE TRIGGER reject_session BEFORE INSERT ON admin_sessions BEGIN SELECT RAISE(ABORT, 'synthetic fault'); END",
+    );
+    const login = await fixture.request('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: fixture.config.adminPassword }),
+    });
+    assert.equal(login.response.status, 500);
+    db.exec('DROP TRIGGER reject_session');
+    db.exec(
+      `CREATE TRIGGER reject_recovery BEFORE INSERT ON ${table} BEGIN SELECT RAISE(ABORT, 'synthetic table fault'); END`,
+    );
+    assert.equal((await fixture.request('/api/health')).response.status, 503);
+    db.exec('DROP TRIGGER reject_recovery');
+    t.mock.timers.tick(5000);
+    assert.equal((await fixture.request('/api/health')).response.status, 200);
+    for (const businessTable of [
+      'inquiries',
+      'analytics_events',
+      'admin_sessions',
+      'audit_logs',
+    ]) {
+      assert.equal(
+        db.prepare(`SELECT count(*) AS count FROM ${businessTable}`).get()
+          .count,
+        0,
+      );
+    }
   });
 }
 
