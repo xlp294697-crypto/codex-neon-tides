@@ -6,5 +6,10 @@
     Strict-Transport-Security "max-age=31536000"
   }
 
-  reverse_proxy app:3002
+  reverse_proxy app:3002 {
+    health_uri /api/health
+    health_interval 10s
+    health_timeout 8s
+    health_status 200
+  }
 }

@@ -1,0 +1,12 @@
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!server.mjs
+!media-manifest.json
+!src/
+!src/**
+!public/
+!public/**
+!deploy/
+!deploy/healthcheck.mjs

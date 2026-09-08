@@ -3,8 +3,104 @@ import assert from 'node:assert/strict';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
+import { httpFixture } from './fixtures/http-app.mjs';
+import { openDatabase } from '../src/db/database.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+
+test('runtime image installs locked production packages and excludes delivery tooling', async () => {
+  const dockerfile = await readFile(path.join(root, 'Dockerfile'), 'utf8');
+  assert.match(dockerfile, /FROM node:24-alpine[\d.]*@sha256:[a-f0-9]{64}/);
+  assert.match(dockerfile, /npm ci --omit=dev/);
+  assert.match(dockerfile, /COPY[^\n]*package-lock.json/);
+  assert.match(dockerfile, /COPY[^\n]*src \.\/src/);
+  assert.match(dockerfile, /COPY[^\n]*public \.\/public/);
+  assert.match(dockerfile, /^USER node$/m);
+  assert.match(dockerfile, /HEALTHCHECK[^]*deploy\/healthcheck.mjs/);
+  assert.doesNotMatch(dockerfile, /COPY\s+\.\s/);
+  const ignored = await readFile(path.join(root, '.dockerignore'), 'utf8');
+  assert.match(ignored, /^\*\*$/m);
+  assert.match(ignored, /^!src\/\*\*$/m);
+});
+
+test('staging and production isolate state and expose only the hardened edge', async () => {
+  for (const environment of ['staging', 'production']) {
+    const compose = await readFile(
+      path.join(root, `compose.${environment}.yaml`),
+      'utf8',
+    );
+    assert.match(compose, new RegExp(`^name: jiuyue-${environment}$`, 'm'));
+    assert.ok(compose.includes(`.env.${environment}`));
+    assert.ok(compose.includes(`${environment.toUpperCase()}_DOMAIN`));
+    assert.ok(compose.includes(`${environment}_data:/app/data`));
+    assert.ok(compose.includes(`${environment}_caddy_data:/data`));
+    assert.ok(compose.includes(`${environment}_caddy_config:/config`));
+    const [app, caddy] = compose.split('  caddy:');
+    for (const service of [app, caddy]) {
+      assert.match(service, /read_only: true/);
+      assert.match(service, /cap_drop:\s+- ALL/);
+      assert.match(service, /no-new-privileges:true/);
+    }
+    assert.doesNotMatch(app, /ports:|build:/);
+    assert.doesNotMatch(app, /cap_add:/);
+    assert.match(caddy, /user: "1000:1000"/);
+    assert.match(caddy, /cap_add:\s+- NET_BIND_SERVICE/);
+    assert.match(app, /APP_IMAGE:\?/);
+    assert.match(caddy, /"80:80\/tcp"/);
+    assert.match(caddy, /"443:443\/tcp"/);
+    assert.match(caddy, /"443:443\/udp"/);
+  }
+});
+
+function healthcheck(port, mode) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['deploy/healthcheck.mjs', mode], {
+      cwd: root,
+      env: { ...process.env, PORT: String(port) },
+      stdio: 'ignore',
+    });
+    child.on('error', reject);
+    child.on('exit', resolve);
+  });
+}
+
+test('health probes distinguish a live process from database write readiness', async (t) => {
+  const fixture = await httpFixture(t);
+  const db = openDatabase(fixture.config.dataPath);
+  fixture.onCleanup(() => db.close());
+  const history = db.prepare('SELECT * FROM schema_migrations').all();
+  db.exec(
+    "CREATE TRIGGER health_rollback_marker AFTER UPDATE ON schema_migrations BEGIN UPDATE schema_migrations SET applied_at = '2099-01-01T00:00:00.000Z' WHERE version = OLD.version; END",
+  );
+  const healthy = await fixture.request('/api/health');
+  const port = new URL(healthy.response.url).port;
+  assert.equal(healthy.response.status, 200);
+  assert.equal(healthy.body.live, true);
+  assert.equal(healthy.body.ready, true);
+  assert.equal(healthy.body.database, 'ready');
+  assert.equal(await healthcheck(port, 'readiness'), 0);
+  assert.deepEqual(
+    db.prepare('SELECT * FROM schema_migrations').all(),
+    history,
+  );
+  db.exec('DROP TRIGGER health_rollback_marker');
+  db.exec(
+    "CREATE TRIGGER reject_health_write BEFORE UPDATE ON schema_migrations BEGIN SELECT RAISE(ABORT, 'synthetic write failure'); END",
+  );
+  assert.equal((await fixture.request('/api/health')).response.status, 503);
+  assert.equal(await healthcheck(port, 'readiness'), 1);
+  const alive = await fixture.request('/api/health/live');
+  assert.equal(alive.response.status, 200);
+  assert.equal(alive.body.live, true);
+  assert.equal(await healthcheck(port, 'liveness'), 0);
+  db.exec('DROP TRIGGER reject_health_write');
+  assert.equal(await healthcheck(port, 'readiness'), 0);
+  fixture.app.lifecycle.closeDatabase();
+  assert.equal(await healthcheck(port, 'readiness'), 1);
+  assert.equal(await healthcheck(port, 'liveness'), 0);
+  assert.equal(await healthcheck(port, 'unknown'), 1);
+});
 
 async function inventory(directory, relative = '') {
   const result = [];

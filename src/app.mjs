@@ -280,12 +280,35 @@ export function createApp(config) {
 
     if (
       (req.method === 'GET' || req.method === 'HEAD') &&
+      pathname === '/api/health/live'
+    ) {
+      sendJson(req, res, 200, { ok: true, live: true });
+      return;
+    }
+
+    if (
+      (req.method === 'GET' || req.method === 'HEAD') &&
       pathname === '/api/health'
     ) {
       if (!dataHealthy)
         throw new HttpError(503, '服务暂时不可用，请稍后再试。');
+      try {
+        // Exercise a real database write without persisting any probe data.
+        db.exec('SAVEPOINT readiness_probe');
+        try {
+          db.prepare('SELECT version FROM schema_migrations LIMIT 1').get();
+          db.exec('UPDATE schema_migrations SET applied_at = applied_at');
+        } finally {
+          db.exec('ROLLBACK TO readiness_probe; RELEASE readiness_probe');
+        }
+      } catch {
+        throw new HttpError(503, '服务暂时不可用，请稍后再试。');
+      }
       sendJson(req, res, 200, {
         ok: true,
+        live: true,
+        ready: true,
+        database: 'ready',
         service: 'jiuyue-sports',
         version: '1.0.0',
         time: new Date().toISOString(),
