@@ -9,7 +9,7 @@ import {
   regularFile,
 } from './sqlite-operations.mjs';
 
-export async function verifyBackup(file) {
+export async function verifyBackup(file, { schemaMode = 'backup' } = {}) {
   for (const suffix of ['-wal', '-shm', '-journal']) {
     try {
       await lstat(`${file}${suffix}`);
@@ -28,7 +28,7 @@ export async function verifyBackup(file) {
     (await digestFile(file)) !== match[1]
   )
     fail('BACKUP_HASH_MISMATCH');
-  return checkDatabase(file);
+  return checkDatabase(file, { schemaMode });
 }
 await cli(import.meta.url, async () => {
   const { values } = parseArgs({ options: { backup: { type: 'string' } } });

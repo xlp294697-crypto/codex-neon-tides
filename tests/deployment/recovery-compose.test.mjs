@@ -27,22 +27,27 @@ test(
     let stage = 'setup';
     async function command(executable, args, options = {}) {
       try {
-        return (
-          await exec(executable, args, {
-            timeout: 90000,
-            maxBuffer: 1024 * 1024,
-            windowsHide: true,
-            ...options,
-          })
-        ).stdout.trim();
+        const { input, ...processOptions } = options;
+        const execution = exec(executable, args, {
+          timeout: 90000,
+          maxBuffer: 1024 * 1024,
+          windowsHide: true,
+          ...processOptions,
+        });
+        if (input !== undefined) execution.child.stdin.end(input);
+        return (await execution).stdout.trim();
       } catch {
         throw new Error(`Synthetic rehearsal failed at ${stage}`);
       }
     }
-    const compose = (args) =>
-      command('docker', ['compose', '-p', project, '-f', composeFile, ...args]);
-    const helper = (args) =>
-      compose(['run', '--rm', '--no-deps', '-T', 'app', ...args]);
+    const compose = (args, options) =>
+      command(
+        'docker',
+        ['compose', '-p', project, '-f', composeFile, ...args],
+        options,
+      );
+    const helper = (args, options) =>
+      compose(['run', '--rm', '--no-deps', '-T', 'app', ...args], options);
     t.after(async () => {
       // Project is a generated literal, never a user supplied production name.
       stage = 'cleanup';
@@ -60,19 +65,15 @@ test(
       process.env.RECOVERY_IMAGE,
     ]);
     assert.match(imageId, /^sha256:[a-f0-9]{64}$/);
-    await writeFile(
-      path.join(directory, 'synthetic.json'),
-      JSON.stringify({
-        version: 1,
-        inquiries: [inquiry('synthetic-1'), inquiry('synthetic-2')],
-        events: [
-          event('synthetic-event-1'),
-          event('synthetic-event-2'),
-          event('synthetic-event-3'),
-        ],
-      }),
-      { mode: 0o600 },
-    );
+    const syntheticInput = JSON.stringify({
+      version: 1,
+      inquiries: [inquiry('synthetic-1'), inquiry('synthetic-2')],
+      events: [
+        event('synthetic-event-1'),
+        event('synthetic-event-2'),
+        event('synthetic-event-3'),
+      ],
+    });
     await writeFile(
       path.join(directory, 'Caddyfile'),
       ':8080 {\n reverse_proxy app:3002\n}\n',
@@ -94,10 +95,7 @@ test(
               SESSION_SECRET: randomBytes(32).toString('hex'),
               ADMIN_PASSWORD_HASH: passwordHash,
             },
-            volumes: [
-              'recovery_data:/app/data',
-              `${path.join(directory, 'synthetic.json')}:/synthetic.json:ro`,
-            ],
+            volumes: ['recovery_data:/app/data'],
             read_only: true,
             tmpfs: ['/tmp:size=16m,mode=1777'],
             cap_drop: ['ALL'],
@@ -130,13 +128,45 @@ test(
       }),
       { mode: 0o600 },
     );
+    stage = 'deliver private fixture';
+    // Pipe data through stdin and create it as the app UID inside its volume.
+    // No host-owned fixture bind mount or host UID assumption is involved.
+    await helper(
+      [
+        'node',
+        '--input-type=module',
+        '-e',
+        "import {writeFile} from 'node:fs/promises'; let input=''; for await (const chunk of process.stdin) input+=chunk; await writeFile('/app/data/synthetic.json',input,{flag:'wx',mode:0o600});",
+      ],
+      { input: syntheticInput },
+    );
+    stage = 'fixture permissions';
+    await helper([
+      'node',
+      '--input-type=module',
+      '-e',
+      "import {stat,readFile} from 'node:fs/promises'; const metadata=await stat('/app/data/synthetic.json'); if(process.getuid()!==1000 || metadata.uid!==1000 || (metadata.mode&511)!==384) throw new Error('fixture must be private to the application UID'); JSON.parse(await readFile('/app/data/synthetic.json','utf8'));",
+    ]);
+    await compose([
+      'run',
+      '--rm',
+      '--no-deps',
+      '-T',
+      '--user',
+      '1001:1001',
+      'app',
+      'node',
+      '--input-type=module',
+      '-e',
+      "import {readFile} from 'node:fs/promises'; try { await readFile('/app/data/synthetic.json'); process.exitCode=1; } catch(error) { if(error.code!=='EACCES') throw error; }",
+    ]);
     stage = 'import';
     const imported = JSON.parse(
       await helper([
         'node',
         'tools/import-json-data.mjs',
         '--source',
-        '/synthetic.json',
+        '/app/data/synthetic.json',
         '--database',
         '/app/data/site.db',
       ]),
@@ -151,7 +181,7 @@ test(
         'node',
         'tools/import-json-data.mjs',
         '--source',
-        '/synthetic.json',
+        '/app/data/synthetic.json',
         '--database',
         '/app/data/site.db',
         '--dry-run',

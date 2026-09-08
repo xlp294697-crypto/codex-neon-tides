@@ -65,7 +65,9 @@ export function backupTime(name) {
     ? Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.${m[7]}Z`)
     : NaN;
 }
-export async function checkDatabase(file) {
+export async function checkDatabase(file, { schemaMode = 'live' } = {}) {
+  if (!['live', 'backup', 'restore'].includes(schemaMode))
+    fail('MIGRATION_MODE_INVALID');
   await regularFile(file);
   const db = new DatabaseSync(file, { readOnly: true });
   try {
@@ -84,20 +86,42 @@ export async function checkDatabase(file) {
         'SELECT version, checksum FROM schema_migrations ORDER BY version',
       )
       .all();
-    // Restoration is deliberately stricter than forward-compatible app startup.
-    // Restore with the matching image; never silently migrate a recovery source.
-    if (!names.length || history.length !== names.length)
-      fail('MIGRATION_INCOMPATIBLE');
-    for (let i = 0; i < names.length; i++) {
+    if (!names.length || !history.length) fail('MIGRATION_INCOMPATIBLE');
+    const bundled = new Map();
+    for (const name of names) {
+      const version = Number(name.split('-')[0]);
       const checksum = createHash('sha256')
-        .update(await readFile(new URL(names[i], migrations)))
+        .update(await readFile(new URL(name, migrations)))
         .digest('hex');
+      if (!Number.isSafeInteger(version) || version < 1 || bundled.has(version))
+        fail('MIGRATION_INCOMPATIBLE');
+      bundled.set(version, checksum);
+    }
+    const bundledVersion = Math.max(...bundled.keys());
+    const recordedVersion = history.at(-1).version;
+    const applied = new Map(history.map((row) => [row.version, row.checksum]));
+    for (const row of history) {
+      // Like application startup, accept higher versions from an expand-only
+      // successor, but never unknown intermediate versions or changed known SQL.
       if (
-        history[i].version !== Number(names[i].split('-')[0]) ||
-        history[i].checksum !== checksum
+        (bundled.has(row.version) &&
+          bundled.get(row.version) !== row.checksum) ||
+        (!bundled.has(row.version) && row.version <= bundledVersion)
       )
         fail('MIGRATION_INCOMPATIBLE');
     }
+    for (const version of bundled.keys()) {
+      // A retained backup may predate a deployment, so only its applied prefix
+      // is required. Live health requires all bundled migrations to be applied.
+      if (
+        (schemaMode !== 'backup' || version <= recordedVersion) &&
+        !applied.has(version)
+      )
+        fail('MIGRATION_INCOMPATIBLE');
+    }
+    // Restoration remains conservative: use the matching recovery tool image.
+    if (schemaMode === 'restore' && history.length !== bundled.size)
+      fail('MIGRATION_INCOMPATIBLE');
     for (const table of [
       'inquiries',
       'analytics_events',

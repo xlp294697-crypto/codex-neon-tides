@@ -89,7 +89,9 @@ node tools/backup-sqlite.mjs --database /opt/jiuyue-sports/data/site.db --direct
 node tools/verify-backup.mjs --backup /opt/jiuyue-sports/backups/<generated-name>.db
 ```
 
-工具通过 SQLite online backup API 读取包括已提交 WAL 的一致快照，先生成唯一 UTC 时间与随机后缀的 `.partial` 文件，再检查 `integrity_check`、`foreign_key_check`、迁移版本/SQL 校验和及业务表，刷盘并原子重命名。完成后写入并复核 `.db.sha256.txt`；内容严格为 `SHA256摘要␠␠文件名` 加换行，不含绝对路径。移动时必须一起移动数据库和 sidecar，保留文件名。在 Linux 也可于备份目录执行 `sha256sum -c <generated-name>.db.sha256.txt`，但仍须运行 Node 验证工具检查 SQLite。只有双文件齐全且验证成功才算可用恢复点；中断留下的 partial 或无 sidecar 文件须人工确认后清理，不能当作成功备份。sidecar 只能检测损坏，不能抵御能同时改写备份与校验和的攻击者。
+工具通过 SQLite online backup API 读取包括已提交 WAL 的一致快照，先生成唯一 UTC 时间与随机后缀的 `.partial` 文件，再检查 `integrity_check`、`foreign_key_check`、已应用迁移/SQL 校验和及业务表，刷盘。先完整写入并刷盘 `.db.sha256.txt` 和目录，最后将已验证数据库原子重命名为 `.db` 作为发布点，再复核文件对；监控只枚举 `.db`，不会看到尚无完整校验文件的半成品。校验文件内容严格为 `SHA256摘要␠␠文件名` 加换行，不含绝对路径。移动时必须一起移动数据库和 sidecar，保留文件名。在 Linux 也可于备份目录执行 `sha256sum -c <generated-name>.db.sha256.txt`，但仍须运行 Node 验证工具检查 SQLite。只有双文件齐全且验证成功才算可用恢复点；中断留下的 partial、孤立 sidecar 或无 sidecar 文件须人工确认后清理，不能当作成功备份。sidecar 只能检测损坏，不能抵御能同时改写备份与校验和的攻击者。
+
+迁移校验分三种用途：主库健康要求当前工具携带的迁移全部已应用且校验匹配，允许扩展迁移后的更高版本，以支持旧程序回滚；日常备份及保留备份验证允许只具有历史前缀，也允许兼容的更高版本，避免新版监控误报部署前恢复点；实际恢复仍要求与恢复工具完全匹配。所有用途均拒绝已知迁移校验不符、已应用历史中的已知中间版本缺失或未知中间版本；保留备份只允许尚未应用的尾部版本缺失。这些检查不自动执行迁移，也不能证明未知更高版本一定是安全扩展，发布兼容性审查仍必须完成。
 
 新的发布备份同时保留旧 `.sha256` 和新增可移动 `.sha256.txt`，并转换为独立 DELETE journal 快照，可由相同验证/恢复工具读取。旧版本只生成 `.sha256` 的恢复点必须先在受控环境核对原摘要，再由操作员按受审流程转换 sidecar 或用当时的恢复程序；禁止用新计算摘要直接为未知来源文件背书。备份文件旁存在 WAL/SHM/journal 时新验证器拒绝，把整组文件保全并处理，不能默默忽略 sidecar。
 

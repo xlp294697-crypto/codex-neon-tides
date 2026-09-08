@@ -45,14 +45,17 @@ export async function backupSqlite(
       copy.close();
     }
     await chmod(temporary, 0o600);
-    await checkDatabase(temporary);
+    await checkDatabase(temporary, { schemaMode: 'backup' });
     const digest = await digestFile(temporary);
     await syncFile(temporary);
-    await rename(temporary, file);
+    // The database name is the publication point. Complete and sync its
+    // checksum first, so listing *.db can never select a half-published pair.
     await durableWrite(
       `${file}.sha256.txt`,
       `${digest}  ${path.basename(file)}\n`,
     );
+    await syncDirectory(directory);
+    await rename(temporary, file);
     await verifyBackup(file);
     await syncDirectory(directory);
     // Generated names only; safety/release backups use distinct directories.

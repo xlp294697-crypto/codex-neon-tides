@@ -37,7 +37,7 @@ export async function restoreSqlite({
   // and keep it stopped throughout; sidecars are an additional fail-closed guard.
   for (const suffix of ['-wal', '-shm', '-journal'])
     if (await exists(`${target}${suffix}`)) fail('DATABASE_NOT_QUIESCENT');
-  await verifyBackup(source);
+  await verifyBackup(source, { schemaMode: 'restore' });
   const directory = path.dirname(target);
   await privateDirectory(directory);
   const lock = `${target}.restore-lock`;
@@ -68,7 +68,7 @@ export async function restoreSqlite({
         `  ${path.basename(temporary)}\n`,
       ),
     );
-    await verifyBackup(temporary);
+    await verifyBackup(temporary, { schemaMode: 'restore' });
     await syncFile(temporary);
     for (const suffix of ['-wal', '-shm', '-journal'])
       if (await exists(`${target}${suffix}`)) fail('DATABASE_NOT_QUIESCENT');

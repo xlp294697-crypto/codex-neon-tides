@@ -2,6 +2,8 @@
 
 测试使用虚构、最小化的夹具和独立临时数据目录。生产预约、访问记录、日志、电话、会话或其他个人数据绝不得进入测试、夹具、截图或错误输出。
 
+恢复回归同时覆盖扩展迁移后的旧版本备份/健康检查、新版监控读取部署前备份、恢复的严格兼容性，以及数据库文件刚发布时的完整监控探测。路径测试从含空格和非 ASCII 字符的临时工具目录执行备份、验证及恢复。Compose 演练通过标准输入把虚构 JSON 送入容器，由 UID 1000 在数据卷内创建 0600 文件，验证 UID 1000 可读且 UID 1001 被拒绝；不把宿主机账户的私有 JSON 文件绑定挂载给容器，也不假设宿主机 UID 为 1000。
+
 恢复专项：`node --test tests/integration/backup-restore.test.mjs tests/integration/monitor-health.test.mjs` 验证 WAL 快照、可移动 SHA-256、完整性/外键、迁移兼容、安全备份、停止声明、留存以及监控失败代码。实际本地容器演练先 `docker build -t jiuyue-sports:recovery .`，再设置 `RECOVERY_IMAGE=jiuyue-sports:recovery` 运行 `node --test tests/deployment/recovery-compose.test.mjs`（PowerShell 用 `$env:RECOVERY_IMAGE`）。此测试显式创建并清理它自己的 Compose 项目及虚构数据卷，经 Caddy 回环 HTTP 执行恢复前后的 staging 冒烟，不读取用户 `.env`、不连接生产。独立运行且没有镜像变量时跳过；不能将跳过记为恢复验证，也不替代公网 TLS、真实 staging 或异地恢复。完整过程和限制见运维指南。
 
 ## 四个测试层
