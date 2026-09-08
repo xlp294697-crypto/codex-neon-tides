@@ -102,6 +102,32 @@ test('a missing applied migration is rejected', async (t) => {
   assert.throws(() => migrateCopy(db), /missing/i);
 });
 
+test('an older image accepts higher additive versions without changing history or data', async (t) => {
+  const { db, directory } = await databaseFixture(t);
+  const { migrateCopy, copy } = await migrationFixture(directory);
+  migrate(db);
+  await writeFile(
+    path.join(copy, 'migrations', '002-expand.sql'),
+    'ALTER TABLE inquiries ADD COLUMN release_note TEXT;',
+  );
+  assert.equal(migrateCopy(db), 2);
+  db.exec(
+    "CREATE TABLE rollback_fixture (value TEXT); INSERT INTO rollback_fixture VALUES ('synthetic');",
+  );
+  const history = db.prepare('SELECT * FROM schema_migrations').all();
+  assert.equal(migrate(db), 2);
+  assert.deepEqual(
+    db.prepare('SELECT * FROM schema_migrations').all(),
+    history,
+  );
+  assert.equal(
+    db.prepare('SELECT count(*) AS n FROM rollback_fixture').get().n,
+    1,
+  );
+  db.exec('DELETE FROM schema_migrations WHERE version = 1');
+  assert.throws(() => migrate(db), /missing|order/i);
+});
+
 test('a failed migration rolls back schema and migration history and can be retried', async (t) => {
   const { db, directory } = await databaseFixture(t);
   const { migrateCopy, sqlPath, copy } = await migrationFixture(directory);

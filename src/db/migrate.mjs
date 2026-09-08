@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 
 const migrationsDirectory = new URL('./migrations/', import.meta.url);
 
+export const supportsForwardSchema = true;
+
 function readMigrations() {
   let previousVersion = 0;
   return readdirSync(migrationsDirectory)
@@ -25,7 +27,7 @@ function readMigrations() {
 
 // Lock before reading history so competing starters cannot apply a version twice.
 // One transaction covers all pending SQL and its history, including first startup.
-export function migrate(db) {
+export function migrate(db, { validatePending } = {}) {
   const migrations = readMigrations();
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -40,14 +42,19 @@ export function migrate(db) {
       )
       .all();
     for (const recorded of applied) {
+      // An expand-only successor may have added higher versions. Verify every
+      // migration this image knows; do not erase newer history during rollback.
       const migration = migrations.find(
         (item) => item.version === recorded.version,
       );
-      if (!migration)
+      if (
+        !migration &&
+        (!migrations.length || recorded.version <= migrations.at(-1).version)
+      )
         throw new Error(
           `Missing applied migration version ${recorded.version}`,
         );
-      if (migration.checksum !== recorded.checksum) {
+      if (migration && migration.checksum !== recorded.checksum) {
         throw new Error(
           `Migration checksum mismatch for version ${recorded.version}`,
         );
@@ -62,6 +69,7 @@ export function migrate(db) {
       if (appliedVersions.has(migration.version)) continue;
       if (migration.version <= version)
         throw new Error(`Out-of-order migration version ${migration.version}`);
+      validatePending?.(migration);
       db.exec(migration.sql);
       record.run(
         migration.version,
