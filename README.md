@@ -11,6 +11,17 @@
 
 交付包中的 `data/site-data.json` 是空数据，不包含制作电脑上的真实访问记录、询盘、日志、密码或会话密钥。原始证照资料也不会随包交付，网站只使用 `public/media/` 中的发布版图片。
 
+## 工程文档
+
+面向开发与维护人员的长期规则按关注点维护，避免在本部署说明中重复：
+
+- [架构指南](docs/architecture.md)
+- [开发指南](docs/development.md)
+- [测试指南](docs/testing.md)
+- [运维指南](docs/operations.md)
+
+本 README 保留面向部署者的具体平台、初始化、备份和恢复操作；安全与隐私边界见 [SECURITY.md](SECURITY.md)，上线验收见 [DEPLOYMENT-CHECKLIST.md](DEPLOYMENT-CHECKLIST.md)。
+
 ## 先理解外网访问方式
 
 `127.0.0.1:3002` 只代表服务器本机内部端口。正式访客应打开：
@@ -346,7 +357,7 @@ node --test
 - `public/privacy.html` 是与当前程序行为一致的运营模板，不替代针对实际托管、人员权限、线下营销和未成年人业务流程的专业法律审查。
 - 程序不会自行发布到你的服务器，也不包含任何服务器、域名、云平台或证书凭据。
 
-完整上线核对见 `DEPLOYMENT-CHECKLIST.md`，安全运维见 `SECURITY.md`。
+完整上线核对见 [DEPLOYMENT-CHECKLIST.md](DEPLOYMENT-CHECKLIST.md)，安全运维见 [SECURITY.md](SECURITY.md)；工程规则见 [架构指南](docs/architecture.md)、[开发指南](docs/development.md)、[测试指南](docs/testing.md) 与 [运维指南](docs/operations.md)。
 
 ## 官方部署参考
 
