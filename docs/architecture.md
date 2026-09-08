@@ -30,6 +30,10 @@ tests/              unit、integration、e2e 与 fixtures
 
 路由层不得包含 SQL 或表结构细节；服务层不应依赖 HTTP 表达；仓储层是业务层访问 SQLite 的唯一入口。`app.mjs` 保持可独立组合，`server.mjs` 仅承载进程生命周期。
 
+当前模块拆分已落实到 `config.mjs`、`http/`、`middleware/`、`validation/` 和 `services/`。认证、CSRF、限流状态独立于路由；请求先沿用现有文本规范化规则，再通过固定版本 Ajv 的应用内 Schema 校验，返回明确的成功值或错误码与中文消息。未启用 Ajv 的 `$data` 动态引用选项。拒绝统计或无效统计同意不阻止有效预约，只移除预约归因；事件必须具有有效统计同意。
+
+`createInquiryService(repository)` 接收 `create(record)`、`findAll()`、`updateStatus(id, status, updatedAt)` 和 `remove(id)`；更新和删除返回记录是否存在。`createAnalyticsService(repository)` 接收原子批量写入方法 `insertBatch(events)`，负责队列、批量与重试；定时器仍由 `server.mjs` 管理。服务不调用文件系统，也不决定 HTTP 状态码。当前 `app.mjs` 提供串行 JSON 仓储适配器，后续 SQLite 仓储替换这些依赖。纯函数 `createDashboard(data, timeZone, now?)` 保持现有去重、转化率及报表时区口径。
+
 ## 请求与数据流
 
 - 预约：路由校验输入 → 服务执行业务规则 → 仓储在 SQLite 事务中写入 → 仅事务成功后返回成功。失败时必须明确失败，不能伪造成功。

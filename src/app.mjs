@@ -1,10 +1,4 @@
-import {
-  createHmac,
-  randomBytes,
-  randomUUID,
-  scryptSync,
-  timingSafeEqual,
-} from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   chmod,
   copyFile,
@@ -20,12 +14,15 @@ import {
 import path from 'node:path';
 import { HttpError } from './http/errors.mjs';
 import { createResponseHelpers } from './http/responses.mjs';
-
-const ANALYTICS_NOTICE_VERSION = '2026-08-22';
-const EVENT_BATCH_SIZE = 100;
-const EVENT_BUFFER_LIMIT = 1000;
-const EVENT_FLUSH_DELAY_MS = 2000;
-const EVENT_RETRY_DELAY_MS = 5000;
+import { createAuth } from './middleware/auth.mjs';
+import { requireCsrf } from './middleware/csrf.mjs';
+import { createRateLimiter } from './middleware/rate-limit.mjs';
+import { getText } from './validation/common.mjs';
+import { validateInquiry } from './validation/inquiries.mjs';
+import { validateEvent } from './validation/events.mjs';
+import { createDashboard } from './services/dashboard-service.mjs';
+import { createInquiryService } from './services/inquiry-service.mjs';
+import { createAnalyticsService } from './services/analytics-service.mjs';
 
 const STATIC_FILES = new Map([
   [
@@ -121,45 +118,42 @@ export function createApp(config) {
     eventRetentionDays: EVENT_RETENTION_DAYS,
     maxEventRecords: MAX_EVENT_RECORDS,
     maxInquiryRecords: MAX_INQUIRY_RECORDS,
-    sessionHours: SESSION_HOURS,
-    trustProxy: TRUST_PROXY,
-    cookieSecure: COOKIE_SECURE,
-    adminPassword: ADMIN_PASSWORD,
-    adminPasswordHash: ADMIN_PASSWORD_HASH,
-    sessionSecret: SESSION_SECRET,
     icpNumber: ICP_NUMBER,
     reportTimeZone: REPORT_TIME_ZONE,
   } = config;
-  const REPORT_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
-    timeZone: REPORT_TIME_ZONE,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
   const { readJson, sendBuffer, sendJson } = createResponseHelpers(config);
-
-  const rateBuckets = {
-    events: new Map(),
-    eventsGlobal: new Map(),
-    inquiriesAll: new Map(),
-    inquiriesGlobal: new Map(),
-    inquiriesFast: new Map(),
-    inquiriesHourly: new Map(),
-    login: new Map(),
-  };
-  const adminSessions = new Map();
 
   let dataQueue = Promise.resolve();
   let dataHealthy = true;
-  let eventFlushPromise = null;
-  const eventBuffer = [];
-  let scheduleEventFlushTimer = () => undefined;
-  let cancelEventFlushTimer = () => undefined;
 
-  function getText(value, maximum = 500) {
-    if (value === null || value === undefined) return '';
-    return String(value).trim().slice(0, maximum);
-  }
+  const auth = createAuth(config);
+  const { verifyAdminPassword, newSession, requireAdmin, sessionCookie } = auth;
+  const rateLimiter = createRateLimiter(config);
+  const { buckets: rateBuckets, getRequestIp, hitRateLimit, clearRateLimit } = rateLimiter;
+
+  // Transitional JSON adapters keep persistence outside the services until the
+  // planned SQLite repositories replace this storage implementation.
+  const inquiryService = createInquiryService({
+    create: (inquiry) => mutateData((data) => data.inquiries.unshift(inquiry)),
+    findAll: async () => (await readData()).inquiries,
+    updateStatus: (id, status, updatedAt) => mutateData((data) => {
+      const inquiry = data.inquiries.find((item) => item.id === id);
+      if (!inquiry) return false;
+      inquiry.status = status;
+      inquiry.updatedAt = updatedAt;
+      return true;
+    }),
+    remove: (id) => mutateData((data) => {
+      const index = data.inquiries.findIndex((item) => item.id === id);
+      if (index < 0) return false;
+      data.inquiries.splice(index, 1);
+      return true;
+    }),
+  });
+  const analyticsService = createAnalyticsService({
+    insertBatch: (batch) => mutateData((data) => data.events.push(...batch)),
+  }, { onWriteFailure: () => { dataHealthy = false; } });
+  const { flushEventBuffer, cancelScheduledEventFlush } = analyticsService;
 
   function escapeHtml(value) {
     return String(value).replace(
@@ -173,177 +167,6 @@ export function createApp(config) {
           "'": '&#39;',
         })[character],
     );
-  }
-
-  function getSource(input) {
-    const source = normalizeCampaignValue(input?.utm?.source, 40);
-    if (source) return source;
-    const referrer = normalizeReferrer(input?.referrer).toLowerCase();
-    if (referrer.includes('google')) return 'Google';
-    if (referrer.includes('bing')) return 'Bing';
-    if (referrer) return 'Referral';
-    return 'Direct';
-  }
-
-  function normalizeCampaignValue(value, maximum) {
-    return getText(value, maximum * 2)
-      .normalize('NFKC')
-      .replace(/[^\p{L}\p{N}._-]+/gu, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, maximum);
-  }
-
-  function normalizeReferrer(value) {
-    const raw = getText(value, 500);
-    if (!raw) return '';
-    try {
-      const parsed = new URL(raw);
-      if (!['http:', 'https:'].includes(parsed.protocol)) return '';
-      return parsed.origin.slice(0, 250);
-    } catch {
-      return '';
-    }
-  }
-
-  function normalizeVisitorId(value) {
-    const visitorId = getText(value, 100);
-    return /^[A-Za-z0-9_-]{8,100}$/.test(visitorId) ? visitorId : '';
-  }
-
-  function readAnalyticsConsent(body) {
-    if (
-      body?.analyticsConsent !== true ||
-      body?.analyticsNoticeVersion !== ANALYTICS_NOTICE_VERSION
-    )
-      return null;
-    const consentAt = getText(body.analyticsConsentAt, 40);
-    const timestamp = Date.parse(consentAt);
-    if (!Number.isFinite(timestamp) || timestamp > Date.now() + 86400000)
-      return null;
-    return {
-      analyticsConsentAt: new Date(timestamp).toISOString(),
-      analyticsNoticeVersion: ANALYTICS_NOTICE_VERSION,
-    };
-  }
-
-  function getRequestIp(req) {
-    if (TRUST_PROXY) {
-      const forwarded = getText(req.headers['x-forwarded-for'], 300)
-        .split(',')[0]
-        .trim();
-      if (forwarded) return forwarded;
-    }
-    return req.socket.remoteAddress || 'unknown';
-  }
-
-  function hitRateLimit(bucket, key, limit, windowMs) {
-    const now = Date.now();
-    const current = bucket.get(key);
-    if (!current || current.resetAt <= now) {
-      bucket.set(key, { count: 1, resetAt: now + windowMs });
-      return false;
-    }
-    current.count += 1;
-    return current.count > limit;
-  }
-
-  function clearRateLimit(bucket, key) {
-    bucket.delete(key);
-  }
-
-  function safeEqual(left, right) {
-    const a = Buffer.from(String(left));
-    const b = Buffer.from(String(right));
-    if (a.length !== b.length) return false;
-    return timingSafeEqual(a, b);
-  }
-
-  function verifyAdminPassword(password) {
-    if (ADMIN_PASSWORD_HASH) {
-      const [, salt, expected] = ADMIN_PASSWORD_HASH.split('.');
-      const calculated = scryptSync(
-        String(password),
-        Buffer.from(salt, 'base64url'),
-        64,
-      ).toString('base64url');
-      return safeEqual(calculated, expected);
-    }
-    return safeEqual(String(password), ADMIN_PASSWORD);
-  }
-
-  function sign(value) {
-    return createHmac('sha256', SESSION_SECRET)
-      .update(value)
-      .digest('base64url');
-  }
-
-  function newSession() {
-    const token = randomBytes(32).toString('base64url');
-    const cookie = `${token}.${sign(token)}`;
-    const session = {
-      token,
-      role: 'admin',
-      exp: Date.now() + SESSION_HOURS * 3600000,
-    };
-    adminSessions.set(token, session);
-    return { ...session, cookie, csrfToken: sign(`csrf:${cookie}`) };
-  }
-
-  function getCookie(req, name) {
-    const cookies = String(req.headers.cookie || '').split(';');
-    for (const item of cookies) {
-      const separator = item.indexOf('=');
-      if (separator < 0) continue;
-      if (item.slice(0, separator).trim() === name)
-        return item.slice(separator + 1).trim();
-    }
-    return '';
-  }
-
-  function readSession(req) {
-    const cookie = getCookie(req, 'jy_admin');
-    const separator = cookie.lastIndexOf('.');
-    if (!cookie || separator < 1) return null;
-    const token = cookie.slice(0, separator);
-    const signature = cookie.slice(separator + 1);
-    if (!safeEqual(sign(token), signature)) return null;
-    const session = adminSessions.get(token);
-    if (
-      !session ||
-      session.role !== 'admin' ||
-      !Number.isFinite(session.exp) ||
-      session.exp <= Date.now()
-    ) {
-      adminSessions.delete(token);
-      return null;
-    }
-    return { ...session, cookie, csrfToken: sign(`csrf:${cookie}`) };
-  }
-
-  function requireAdmin(req) {
-    const session = readSession(req);
-    if (!session) throw new HttpError(401, '请先登录管理后台。');
-    return session;
-  }
-
-  function requireCsrf(req, session) {
-    if (
-      !safeEqual(getText(req.headers['x-csrf-token'], 200), session.csrfToken)
-    ) {
-      throw new HttpError(403, '安全校验失败，请刷新后台后重试。');
-    }
-  }
-
-  function sessionCookie(value, maxAge = SESSION_HOURS * 3600) {
-    const attributes = [
-      `jy_admin=${value}`,
-      'HttpOnly',
-      'SameSite=Strict',
-      'Path=/',
-      `Max-Age=${maxAge}`,
-    ];
-    if (COOKIE_SECURE) attributes.push('Secure');
-    return attributes.join('; ');
   }
 
   async function ensureDataFile() {
@@ -428,218 +251,6 @@ export function createApp(config) {
   async function readData() {
     await dataQueue;
     return readDataFromDisk();
-  }
-
-  function scheduleEventFlush(delay = EVENT_FLUSH_DELAY_MS) {
-    if (!eventBuffer.length) return;
-    scheduleEventFlushTimer(delay);
-  }
-
-  function cancelScheduledEventFlush() {
-    cancelEventFlushTimer();
-  }
-
-  function enqueueEvent(event) {
-    if (eventBuffer.length >= EVENT_BUFFER_LIMIT)
-      throw new HttpError(503, '统计队列繁忙，请稍后再试。');
-    eventBuffer.push(event);
-    if (eventBuffer.length >= EVENT_BATCH_SIZE) {
-      cancelScheduledEventFlush();
-      void flushEventBuffer().catch((error) =>
-        console.error(
-          `[${new Date().toISOString()}] 统计批量写入失败：`,
-          error,
-        ),
-      );
-    } else scheduleEventFlush();
-  }
-
-  async function flushEventBuffer({ drain = false } = {}) {
-    if (drain) cancelScheduledEventFlush();
-    let failed = false;
-    try {
-      do {
-        if (!eventFlushPromise) {
-          if (!eventBuffer.length) break;
-          const batch = eventBuffer.splice(0, EVENT_BATCH_SIZE);
-          eventFlushPromise = (async () => {
-            try {
-              await mutateData((data) => data.events.push(...batch));
-            } catch (error) {
-              eventBuffer.unshift(...batch);
-              dataHealthy = false;
-              throw error;
-            }
-          })();
-        }
-        const pendingFlush = eventFlushPromise;
-        try {
-          await pendingFlush;
-        } finally {
-          if (eventFlushPromise === pendingFlush) eventFlushPromise = null;
-        }
-        if (drain) cancelScheduledEventFlush();
-      } while (drain && eventBuffer.length);
-    } catch (error) {
-      failed = true;
-      throw error;
-    } finally {
-      if (eventBuffer.length) {
-        const delay = failed
-          ? EVENT_RETRY_DELAY_MS
-          : eventBuffer.length >= EVENT_BATCH_SIZE
-            ? 0
-            : EVENT_FLUSH_DELAY_MS;
-        scheduleEventFlush(delay);
-      }
-    }
-  }
-
-  function reportDateKey(value) {
-    const date = value instanceof Date ? value : new Date(value);
-    if (!Number.isFinite(date.getTime())) return '';
-    const parts = Object.fromEntries(
-      REPORT_DATE_FORMATTER.formatToParts(date)
-        .filter((part) => ['year', 'month', 'day'].includes(part.type))
-        .map((part) => [part.type, part.value]),
-    );
-    return parts.year && parts.month && parts.day
-      ? `${parts.year}-${parts.month}-${parts.day}`
-      : '';
-  }
-
-  function recentReportDates(count = 7, now = Date.now()) {
-    const dates = [];
-    for (
-      let offset = 0;
-      dates.length < count && offset < count + 5;
-      offset += 1
-    ) {
-      const date = reportDateKey(now - offset * 86400000);
-      if (date && !dates.includes(date)) dates.unshift(date);
-    }
-    return dates;
-  }
-
-  function getDashboard(data) {
-    const events = Array.isArray(data.events) ? data.events : [];
-    const inquiries = Array.isArray(data.inquiries) ? data.inquiries : [];
-    const attributedInquiries = inquiries.filter(
-      (item) => item.analyticsAttributed === true,
-    );
-    const pageViews = events.filter(
-      (event) => !event.eventType || event.eventType === 'page_view',
-    );
-    const bookingSuccessEvents = events.filter(
-      (event) => event.eventType === 'booking_success',
-    );
-    const visitorIds = new Set(
-      pageViews
-        .map((event) => normalizeVisitorId(event.visitorId))
-        .filter(Boolean),
-    );
-    const trackedConversionVisitorIds = new Set(
-      bookingSuccessEvents
-        .map((event) => normalizeVisitorId(event.visitorId))
-        .filter((visitorId) => visitorId && visitorIds.has(visitorId)),
-    );
-    const daily = recentReportDates().map((date) => {
-      const dailyPageViews = pageViews.filter(
-        (event) => reportDateKey(event.createdAt) === date,
-      );
-      const dailyTrackedVisitors = new Set(
-        bookingSuccessEvents
-          .filter((event) => reportDateKey(event.createdAt) === date)
-          .map((event) => normalizeVisitorId(event.visitorId))
-          .filter((visitorId) => visitorId && visitorIds.has(visitorId)),
-      );
-      return {
-        date,
-        visits: dailyPageViews.length,
-        visitors: new Set(
-          dailyPageViews
-            .map((event) => normalizeVisitorId(event.visitorId))
-            .filter(Boolean),
-        ).size,
-        enquiries: inquiries.filter(
-          (item) => reportDateKey(item.createdAt) === date,
-        ).length,
-        trackedConversions: dailyTrackedVisitors.size,
-      };
-    });
-    const group = (items, labelFor) => {
-      const counts = new Map();
-      for (const item of items) {
-        const label = labelFor(item) || '未知';
-        counts.set(label, (counts.get(label) || 0) + 1);
-      }
-      return [...counts.entries()]
-        .map(([label, value]) => ({ label, value }))
-        .sort(
-          (a, b) =>
-            b.value - a.value || a.label.localeCompare(b.label, 'zh-CN'),
-        );
-    };
-    const imageOpenEvents = events.filter(
-      (event) => event.eventType === 'image_open',
-    );
-    const imageGroups = new Map();
-    for (const event of imageOpenEvents) {
-      const key = JSON.stringify([
-        event.targetId || '',
-        event.targetLabel || '',
-        event.section || '',
-      ]);
-      const current = imageGroups.get(key) || {
-        id: event.targetId || '',
-        label: event.targetLabel || '',
-        section: event.section || '',
-        value: 0,
-      };
-      current.value += 1;
-      imageGroups.set(key, current);
-    }
-    const visits = pageViews.length;
-    const visitors = visitorIds.size;
-    const trackedConversions = trackedConversionVisitorIds.size;
-    const topImages = [...imageGroups.values()].sort(
-      (a, b) => b.value - a.value || a.id.localeCompare(b.id),
-    );
-    return {
-      metrics: {
-        visits,
-        visitors,
-        enquiries: inquiries.length,
-        attributedEnquiries: attributedInquiries.length,
-        trackedConversions,
-        conversion: visitors
-          ? Math.round((trackedConversions / visitors) * 1000) / 10
-          : 0,
-      },
-      reportTimeZone: REPORT_TIME_ZONE,
-      daily,
-      sources: group(pageViews, (event) => event.source),
-      pages: group(pageViews, (event) => event.page).slice(0, 6),
-      engagement: {
-        qualificationViews: events.filter(
-          (event) =>
-            event.eventType === 'section_view' &&
-            event.section === 'qualifications',
-        ).length,
-        outcomeViews: events.filter(
-          (event) =>
-            event.eventType === 'section_view' && event.section === 'outcomes',
-        ).length,
-        imageOpens: imageOpenEvents.length,
-        assessmentClicks: events.filter(
-          (event) => event.eventType === 'assessment_click',
-        ).length,
-        bookingSuccesses: events.filter(
-          (event) => event.eventType === 'booking_success',
-        ).length,
-        topImages,
-      },
-    };
   }
 
   async function getSafeMedia(pathname) {
@@ -735,50 +346,10 @@ export function createApp(config) {
         throw new HttpError(429, '访问统计请求过于频繁。');
       }
       const body = await readJson(req);
-      const analyticsConsent = readAnalyticsConsent(body);
-      if (!analyticsConsent)
-        throw new HttpError(422, '缺少有效的访问统计同意记录。');
-      const eventType = getText(
-        body.eventType || 'page_view',
-        40,
-      ).toLowerCase();
-      const supported = [
-        'page_view',
-        'section_view',
-        'image_open',
-        'assessment_click',
-        'booking_success',
-      ];
-      if (!supported.includes(eventType))
-        throw new HttpError(422, '不支持的统计事件类型。');
-      const event = {
-        id: randomUUID(),
-        createdAt: new Date().toISOString(),
-        eventType,
-        page: getText(body.page, 160),
-        visitorId: normalizeVisitorId(body.visitorId),
-        section: getText(body.section, 80),
-        targetId: getText(body.targetId, 120),
-        targetLabel: getText(body.targetLabel, 250),
-        referrer: normalizeReferrer(body.referrer),
-        source: getSource(body),
-        medium: normalizeCampaignValue(body?.utm?.medium, 40),
-        campaign: normalizeCampaignValue(body?.utm?.campaign, 80),
-        device: getText(body.device, 30),
-        ...analyticsConsent,
-      };
-      if (!event.page || !event.visitorId)
-        throw new HttpError(422, '缺少页面或随机访客标识。');
-      if (
-        eventType === 'section_view' &&
-        !['qualifications', 'outcomes'].includes(event.section)
-      )
-        throw new HttpError(422, '区块浏览事件缺少有效区块。');
-      if (eventType === 'image_open' && (!event.targetId || !event.targetLabel))
-        throw new HttpError(422, '图片打开事件缺少图片标识。');
-      if (eventType === 'assessment_click' && !event.section)
-        throw new HttpError(422, '预约按钮事件缺少来源区块。');
-      enqueueEvent(event);
+      const result = validateEvent(body);
+      if (!result.ok) throw new HttpError(422, result.message);
+      const accepted = analyticsService.enqueue(result.value);
+      if (!accepted.ok) throw new HttpError(503, accepted.message);
       sendJson(req, res, 202, { ok: true });
       return;
     }
@@ -795,59 +366,15 @@ export function createApp(config) {
         sendJson(req, res, 201, { ok: true, id: randomUUID() });
         return;
       }
-      const analyticsConsent = readAnalyticsConsent(body);
-      const clean = {
-        parentName: getText(body.parentName, 100),
-        phone: getText(body.phone, 40),
-        grade: getText(body.grade, 80),
-        course: getText(body.course, 100),
-        concern: getText(body.concern, 2000),
-        preferredTime: getText(body.preferredTime, 100),
-        sourcePage: analyticsConsent ? getText(body.sourcePage, 160) : '',
-        sourceSection: analyticsConsent ? getText(body.sourceSection, 80) : '',
-        referrer: analyticsConsent ? normalizeReferrer(body.referrer) : '',
-        privacyConsent:
-          body.privacyConsent === true || body.privacyConsent === 'yes',
-      };
-      if (
-        !clean.parentName ||
-        !clean.phone ||
-        !clean.grade ||
-        !clean.course ||
-        !/^\+?[0-9][0-9\s-]{5,29}$/.test(clean.phone)
-      ) {
-        throw new HttpError(
-          422,
-          '请填写家长姓名、有效电话、孩子年级和意向课程。',
-        );
-      }
-      if (!clean.privacyConsent)
-        throw new HttpError(422, '请先确认预约信息处理告知。');
+      const result = validateInquiry(body);
+      if (!result.ok) throw new HttpError(422, result.message);
       if (
         hitRateLimit(rateBuckets.inquiriesFast, ip, 1, 8000) ||
         hitRateLimit(rateBuckets.inquiriesHourly, ip, 8, 3600000)
       ) {
         throw new HttpError(429, '提交过于频繁，请稍后再试。');
       }
-      const inquiry = {
-        id: randomUUID(),
-        createdAt: new Date().toISOString(),
-        status: 'New',
-        source: analyticsConsent ? getSource(body) : '',
-        parentName: clean.parentName,
-        phone: clean.phone,
-        grade: clean.grade,
-        course: clean.course,
-        concern: clean.concern,
-        preferredTime: clean.preferredTime,
-        sourcePage: clean.sourcePage,
-        sourceSection: clean.sourceSection,
-        referrer: clean.referrer,
-        analyticsAttributed: Boolean(analyticsConsent),
-        privacyNoticeVersion: '2026-08-22',
-        privacyConsentAt: new Date().toISOString(),
-      };
-      await mutateData((data) => data.inquiries.unshift(inquiry));
+      const inquiry = await inquiryService.create(result.value);
       sendJson(req, res, 201, { ok: true, id: inquiry.id });
       return;
     }
@@ -882,7 +409,7 @@ export function createApp(config) {
     if (req.method === 'POST' && pathname === '/api/logout') {
       const session = requireAdmin(req);
       requireCsrf(req, session);
-      adminSessions.delete(session.token);
+      auth.invalidateSession(session.token);
       sendJson(
         req,
         res,
@@ -899,7 +426,7 @@ export function createApp(config) {
     ) {
       requireAdmin(req);
       await flushEventBuffer({ drain: true });
-      sendJson(req, res, 200, getDashboard(await readData()));
+      sendJson(req, res, 200, createDashboard(await readData(), REPORT_TIME_ZONE));
       return;
     }
 
@@ -908,7 +435,7 @@ export function createApp(config) {
       pathname === '/api/inquiries'
     ) {
       requireAdmin(req);
-      sendJson(req, res, 200, { inquiries: (await readData()).inquiries });
+      sendJson(req, res, 200, { inquiries: await inquiryService.findAll() });
       return;
     }
 
@@ -917,34 +444,18 @@ export function createApp(config) {
       const session = requireAdmin(req);
       requireCsrf(req, session);
       const body = await readJson(req);
-      const allowed = ['New', 'Contacted', 'Qualified', 'Won', 'Closed'];
-      if (!allowed.includes(body.status))
-        throw new HttpError(422, '预约状态无效。');
-      const changed = await mutateData((data) => {
-        const inquiry = data.inquiries.find(
-          (item) => item.id === statusMatch[1],
-        );
-        if (!inquiry) return false;
-        inquiry.status = body.status;
-        inquiry.updatedAt = new Date().toISOString();
-        return true;
-      });
-      if (!changed) throw new HttpError(404, '没有找到该预约。');
+      const result = await inquiryService.updateStatus(statusMatch[1], body.status);
+      if (!result.ok) {
+        throw new HttpError(result.code === 'INQUIRY_NOT_FOUND' ? 404 : 422, result.message);
+      }
       sendJson(req, res, 200, { ok: true });
       return;
     }
     if (req.method === 'DELETE' && statusMatch) {
       const session = requireAdmin(req);
       requireCsrf(req, session);
-      const removed = await mutateData((data) => {
-        const index = data.inquiries.findIndex(
-          (item) => item.id === statusMatch[1],
-        );
-        if (index < 0) return false;
-        data.inquiries.splice(index, 1);
-        return true;
-      });
-      if (!removed) throw new HttpError(404, '没有找到该预约。');
+      const result = await inquiryService.remove(statusMatch[1]);
+      if (!result.ok) throw new HttpError(404, result.message);
       sendJson(req, res, 200, { ok: true });
       return;
     }
@@ -981,15 +492,8 @@ export function createApp(config) {
   }
 
   function cleanupExpiredState() {
-    const now = Date.now();
-    for (const bucket of Object.values(rateBuckets)) {
-      for (const [key, value] of bucket) {
-        if (value.resetAt <= now) bucket.delete(key);
-      }
-    }
-    for (const [token, session] of adminSessions) {
-      if (session.exp <= now) adminSessions.delete(token);
-    }
+    rateLimiter.cleanupExpiredState();
+    auth.cleanupExpiredState();
   }
 
   async function runDataMaintenance() {
@@ -1012,11 +516,10 @@ export function createApp(config) {
       flushEventBuffer,
       cancelScheduledEventFlush,
       get eventBufferLength() {
-        return eventBuffer.length;
+        return analyticsService.eventBufferLength;
       },
       setEventTimerControls(controls) {
-        scheduleEventFlushTimer = controls.schedule;
-        cancelEventFlushTimer = controls.cancel;
+        analyticsService.setEventTimerControls(controls);
       },
     }),
   });

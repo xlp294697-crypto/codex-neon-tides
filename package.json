@@ -9,7 +9,10 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check src/config.mjs && node --check src/http/errors.mjs && node --check src/http/responses.mjs && node --check src/app.mjs && node --check src/server.mjs && node --check public/app.js && node --check public/admin.js",
+    "check": "node --check server.mjs && node --check src/config.mjs && node --check src/http/errors.mjs && node --check src/http/responses.mjs && node --check src/middleware/auth.mjs && node --check src/middleware/csrf.mjs && node --check src/middleware/rate-limit.mjs && node --check src/validation/common.mjs && node --check src/validation/inquiries.mjs && node --check src/validation/events.mjs && node --check src/services/dashboard-service.mjs && node --check src/services/inquiry-service.mjs && node --check src/services/analytics-service.mjs && node --check src/app.mjs && node --check src/server.mjs && node --check public/app.js && node --check public/admin.js",
     "test": "node --test"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
   }
 }
