@@ -38,9 +38,13 @@ staging 成功后，production 作业等待 GitHub `production` Environment 的 
 3. 执行允许的迁移，启动候选镜像并等待就绪，然后检查公开域名与身份验证。
 4. 记录 commit SHA、镜像摘要、迁移版本、部署时间、审批人、检查结果和回滚目标。
 
-`deploy/deploy-release.sh staging|production` 记录 `.release-state/<environment>/previous-image`、`candidate-image`、成功或回滚后的 `current-image`、`backup-path`、`migration-result` 和 `result`。目录权限为 0700，文件为 0600；GitHub summary 记录提交和最终镜像，Environment 审批记录由 GitHub 保留。失败输出仅报告失败阶段和备份路径，不打印应用日志、环境展开值或业务响应。每次发布的这些主机记录会被下一次更新，应将不含个人信息的发布元数据归档到受控审计系统。
+`deploy/deploy-release.sh staging|production` 记录 `.release-state/<environment>/previous-image`、`candidate-image`、成功或回滚后的 `current-image`，以及对应的 `previous-bundle`、`candidate-bundle`、`current-bundle`、`backup-path`、`migration-result` 和 `result`。目录权限为 0700，文件为 0600；GitHub summary 记录提交和最终镜像，Environment 审批记录由 GitHub 保留。失败输出报告失败阶段、已验证备份路径和前后发布包路径，不打印应用日志、环境展开值或业务响应。每次发布的这些主机记录会被下一次更新，应将不含个人信息的发布元数据归档到受控审计系统。
 
-前一摘要从实际运行容器读取，不能用猜测标签代替。备份失败时旧应用保持运行。停止后的迁移、就绪或冒烟失败会切回前一摘要并等待旧应用就绪；若回滚也失败则明确要求人工恢复。首次 staging 没有旧容器时可以初始化，失败则停止候选应用；production 必须已有使用摘要的容器和可验证的数据库，首次生产初始化属于单独审批的切换。脚本不删除数据卷、不恢复数据库备份、不逆向修改迁移历史。检查失败后的人工恢复须评估备份时间之后的新数据。
+前一摘要从实际运行容器读取，不能用猜测标签代替。前一发布包从 app/Caddy 容器的 Compose working_dir 与 config_files 标签核实；两者必须对应同一仍保留的发布包及单一环境 Compose 文件，且旧包不能与候选包为同一目录。旧 Compose 与 Caddyfile 必须保留原样；缺失、混用或覆盖旧包时在停止服务前拒绝发布，不能把候选配置当作恢复配置。备份失败时旧应用保持运行。
+
+停止后的迁移、就绪或冒烟失败会切回旧发布包中的 Compose/Caddy 配置及固定的 Caddy 镜像，并使用前一 app 摘要强制重新创建 app 与 Caddy 两个服务。容器就绪后，通过公开 origin 执行健康、页面、资源和登录/会话/退出验证，成功才记录 `rollback=restored` 与恢复后的 current-image/current-bundle；包括 staging 回滚在内，恢复检查始终使用 production 模式，不新增询盘。仅应用健康不能证明代理已经恢复。如果任一服务启动或公开路径恢复检查失败，记录 `rollback=rollback-failed`、保留备份和前后发布包路径并要求人工恢复；发布自身始终非零退出。current 字段表示最后验证成功的部署，不应脱离本次 result 判断当前状态。
+
+首次 staging 没有旧容器时可以初始化，失败则停止候选 app 与 Caddy；如果只有既存代理而没有应用，则拒绝自动接管。production 必须已有使用摘要的应用、可恢复的代理发布包和可验证的数据库，首次生产初始化属于单独审批的切换。脚本不删除数据卷、不恢复数据库备份、不逆向修改迁移历史。检查失败后的人工恢复须评估备份时间之后的新数据。
 
 `deploy/release-db.mjs` 只允许保守的扩展 SQL：新建表、普通索引、为已有表增加无约束的可空 TEXT/INTEGER/REAL/BLOB 列。数据改写、删除、重命名、触发器、唯一索引及现有表的新约束都会拒绝；更复杂但可能安全的 SQL 也可能被拒绝，须单独设计审查，不能扩大匹配规则来绕过审批。整个迁移事务在失败时回滚。应用迁移器允许数据库含有高于当前镜像最高版本的历史，但当前镜像携带的迁移必须全部存在并匹配校验和，历史中缺失的中间版本仍拒绝，绝不自动 down-migrate。实际可回滚性仍依赖旧程序与新表结构兼容。
 
