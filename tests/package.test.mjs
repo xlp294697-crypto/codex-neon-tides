@@ -4,6 +4,7 @@ import { lstat, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { httpFixture } from './fixtures/http-app.mjs';
@@ -168,7 +169,7 @@ test('clean-checkout launcher loads .env and the development command enables wat
   );
 });
 
-test('staging and production isolate state and expose only the hardened edge', async () => {
+test('staging and production expose only the hardened app on host loopback', async () => {
   for (const environment of ['staging', 'production']) {
     const compose = await readFile(
       path.join(root, `compose.${environment}.yaml`),
@@ -176,26 +177,81 @@ test('staging and production isolate state and expose only the hardened edge', a
     );
     assert.match(compose, new RegExp(`^name: jiuyue-${environment}$`, 'm'));
     assert.ok(compose.includes(`.env.${environment}`));
-    assert.ok(compose.includes(`${environment.toUpperCase()}_DOMAIN`));
     assert.ok(compose.includes(`${environment}_data:/app/data`));
-    assert.ok(compose.includes(`${environment}_caddy_data:/data`));
-    assert.ok(compose.includes(`${environment}_caddy_config:/config`));
-    const [app, caddy] = compose.split('  caddy:');
-    for (const service of [app, caddy]) {
-      assert.match(service, /read_only: true/);
-      assert.deepEqual(composeList(service, 'cap_drop'), ['ALL']);
-      assert.match(service, /no-new-privileges:true/);
-    }
-    assert.doesNotMatch(app, /ports:|build:/);
-    assert.doesNotMatch(app, /cap_add:/);
-    assert.match(caddy, /user: "1000:1000"/);
-    assert.deepEqual(composeList(caddy, 'cap_add'), ['NET_BIND_SERVICE']);
-    assert.match(app, /APP_IMAGE:\?/);
-    assert.deepEqual(composeList(caddy, 'ports'), [
-      '443:443/tcp',
-      '443:443/udp',
-      '80:80/tcp',
-    ]);
+    assert.doesNotMatch(compose, /^ {2}caddy:|caddy:2|_caddy_/m);
+    assert.match(compose, /read_only: true/);
+    assert.deepEqual(composeList(compose, 'cap_drop'), ['ALL']);
+    assert.match(compose, /no-new-privileges:true/);
+    assert.match(
+      compose,
+      new RegExp(
+        `127\\.0\\.0\\.1:\\$\\{${environment.toUpperCase()}_APP_PORT:-3002\\}:3002`,
+      ),
+    );
+    assert.doesNotMatch(compose, /(?:^|\s)(?:80|443):(?:80|443)/m);
+    assert.doesNotMatch(compose, /build:/);
+    assert.doesNotMatch(compose, /cap_add:/);
+    assert.match(compose, /APP_IMAGE:\?/);
+  }
+});
+
+test('host Nginx terminates TLS and keeps ACME renewal and the app upstream local', async () => {
+  const bootstrap = await readFile(
+    path.join(root, 'deploy', 'nginx-bootstrap.conf.example'),
+    'utf8',
+  );
+  const site = await readFile(
+    path.join(root, 'deploy', 'nginx-site.conf.example'),
+    'utf8',
+  );
+  for (const config of [bootstrap, site]) {
+    assert.match(config, /server_name sports\.example\.com;/);
+    assert.match(config, /location (?:\^~ )?\/\.well-known\/acme-challenge\//);
+    assert.match(config, /root \/var\/www\/certbot;/);
+  }
+  assert.doesNotMatch(bootstrap, /ssl_certificate|proxy_pass/);
+  assert.match(site, /listen 443 ssl http2;/);
+  assert.match(site, /listen 443 ssl default_server;/);
+  assert.match(site, /ssl_reject_handshake on;/);
+  assert.match(site, /ssl_protocols TLSv1\.2 TLSv1\.3;/);
+  assert.match(site, /proxy_pass http:\/\/127\.0\.0\.1:3002;/);
+  assert.match(site, /proxy_set_header Host \$host;/);
+  assert.match(site, /proxy_set_header X-Forwarded-Proto \$scheme;/);
+  assert.match(site, /proxy_set_header X-Forwarded-For \$remote_addr;/);
+  assert.doesNotMatch(site, /proxy_pass http:\/\/(?!127\.0\.0\.1)/);
+  assert.match(site, /return 301 https:\/\/sports\.example\.com\$request_uri;/);
+  for (const config of [bootstrap, site]) {
+    assert.match(config, /listen 80 default_server;/);
+    assert.match(config, /server_name _;/);
+    assert.match(config, /return 444;/);
+  }
+});
+
+test('delivery checksums match Git-normalized file content', async () => {
+  const manifest = await readFile(path.join(root, 'SHA256SUMS.txt'), 'utf8');
+  const seen = new Set();
+  for (const line of manifest.trim().split(/\r?\n/)) {
+    const match = line.match(/^([a-f0-9]{64}) {2}(.+)$/);
+    assert.ok(match, `Invalid checksum entry: ${line}`);
+    const [, expected, manifestPath] = match;
+    const gitPath = manifestPath.replaceAll('\\', '/');
+    assert.equal(seen.has(gitPath), false, `Duplicate checksum: ${gitPath}`);
+    seen.add(gitPath);
+    const object = spawnSync(
+      'git',
+      ['hash-object', `--path=${gitPath}`, gitPath],
+      { cwd: root, encoding: 'utf8' },
+    );
+    assert.equal(object.status, 0, object.stderr);
+    const blob = spawnSync('git', ['cat-file', 'blob', object.stdout.trim()], {
+      cwd: root,
+    });
+    assert.equal(blob.status, 0, blob.stderr.toString());
+    assert.equal(
+      createHash('sha256').update(blob.stdout).digest('hex'),
+      expected,
+      `Stale checksum: ${gitPath}`,
+    );
   }
 });
 
@@ -471,8 +527,7 @@ test('部署入口和安全示例齐全', async () => {
     'Start-Windows.ps1',
     'start-linux.sh',
     '启动网站.cmd',
-    'deploy/Caddyfile.docker',
-    'deploy/Caddyfile.example',
+    'deploy/nginx-bootstrap.conf.example',
     'deploy/nginx-site.conf.example',
     'deploy/jiuyue-sports.service.example',
     'deploy/jiuyue-backup.service.example',
@@ -496,10 +551,10 @@ test('部署入口和安全示例齐全', async () => {
 
   const compose = await readFile(path.join(root, 'compose.yaml'), 'utf8');
   assert.ok(compose.includes('restart: unless-stopped'));
-  assert.ok(compose.includes('"80:80"') && compose.includes('"443:443"'));
+  assert.ok(compose.includes('${APP_BIND_IP:-127.0.0.1}:${PORT:-3002}:3002'));
   assert.ok(compose.includes('COOKIE_SECURE: "true"'));
   assert.ok(compose.includes('cap_drop:'));
-  assert.ok(compose.includes('replace.example.com'));
+  assert.doesNotMatch(compose, /caddy|"80:80"|"443:443"/i);
 
   const environmentExample = await readFile(
     path.join(root, '.env.example'),

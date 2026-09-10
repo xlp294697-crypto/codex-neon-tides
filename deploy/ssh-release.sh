@@ -19,7 +19,7 @@ ssh_options=(-i "$temporary/key" -o "UserKnownHostsFile=$temporary/known_hosts" 
 target="$DEPLOY_USER@$DEPLOY_HOST"
 bundle="$DEPLOY_PATH/releases/$RELEASE_SHA-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
 [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
-tar -czf "$temporary/release.tar.gz" compose.staging.yaml compose.production.yaml deploy/deploy-release.sh deploy/release-db.mjs deploy/smoke-test.mjs deploy/Caddyfile.docker
+tar -czf "$temporary/release.tar.gz" compose.staging.yaml compose.production.yaml deploy/deploy-release.sh deploy/release-db.mjs deploy/smoke-test.mjs
 ssh "${ssh_options[@]}" "$target" "umask 077; mkdir -p '$DEPLOY_PATH/releases'; mkdir '$bundle'"
 scp "${ssh_options[@]}" "$temporary/release.tar.gz" "$target:$bundle/release.tar.gz"
 # Only validated identifiers enter the remote command. The password uses stdin,

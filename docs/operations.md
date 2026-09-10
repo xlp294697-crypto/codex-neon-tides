@@ -2,13 +2,13 @@
 
 ## 环境与拓扑
 
-生产和预发布均使用 Linux、Docker Compose、Caddy、一个 Node.js 应用实例和各自独立的 SQLite 数据卷、域名、容器及密钥。应用端口只在内部网络提供给 Caddy，禁止直接暴露公网。预发布只使用虚构测试数据，严禁复制生产预约或其他个人数据。
+生产和预发布均使用 Linux、宿主机 Nginx/Certbot、Docker Compose、一个 Node.js 应用实例和各自独立的 SQLite 数据卷、域名、容器及密钥。应用端口只绑定宿主机 `127.0.0.1`，由 Nginx 访问，禁止直接暴露公网。预发布只使用虚构测试数据，严禁复制生产预约或其他个人数据。
 
 服务器只拉取已构建的镜像，不在服务器拉取源码或现场构建。镜像以 Git commit SHA 标记版本，以摘要固定不可变内容；预发布和生产必须运行同一镜像摘要。部署凭据分别保存在 GitHub `staging` 和 `production` Environments，生产环境必须人工批准。
 
-容器交付入口分别为 `compose.staging.yaml` 和 `compose.production.yaml`，项目名为 `jiuyue-staging` 和 `jiuyue-production`。各自拥有带项目名前缀的 `staging_data` / `production_data`、Caddy data/config 卷和默认网络；禁止用 `-p` 改成相同项目名。两套配置均由各自 Caddy 占用主机 TCP 80/443 和 UDP 443，因此应部署到独立主机/IP，不能在同一主机默认地址同时启动。应用无主机端口映射。
+容器交付入口分别为 `compose.staging.yaml` 和 `compose.production.yaml`，项目名为 `jiuyue-staging` 和 `jiuyue-production`。各自拥有带项目名前缀的 `staging_data` / `production_data` 和默认网络；禁止用 `-p` 改成相同项目名。默认都把容器 3002 映射到宿主机 `127.0.0.1:3002`，因此预发布和生产应使用独立主机；确需同机演练时必须用 `STAGING_APP_PORT` / `PRODUCTION_APP_PORT` 分配不同回环端口并同步修改对应 Nginx upstream。主机安全组不得开放 3002。
 
-分别复制 `deploy/staging.env.example` 为 `.env.staging`、`deploy/production.env.example` 为 `.env.production`（权限 0600），配置独立的密码哈希、随机会话密钥和 `STAGING_DOMAIN` / `PRODUCTION_DOMAIN`。两份 `APP_IMAGE` 填写同一已验证的 `registry/repository@sha256:...`，示例摘要与域名不能用于上线。环境文件属于敏感数据，不得提交；不要将展开后的 `compose config` 输出放入共享日志。使用明确的文件参数，避免默认读取旧 `.env`：
+分别复制 `deploy/staging.env.example` 为 `.env.staging`、`deploy/production.env.example` 为 `.env.production`（权限 0600），配置独立的密码哈希和随机会话密钥。两份 `APP_IMAGE` 填写同一已验证的 `registry/repository@sha256:...`，示例摘要不能用于上线。域名属于宿主机 Nginx 配置和 GitHub `SMOKE_BASE_URL`，不写入应用环境文件。环境文件属于敏感数据，不得提交；不要将展开后的 `compose config` 输出放入共享日志。使用明确的文件参数，避免默认读取旧 `.env`：
 
 ```bash
 docker compose --env-file .env.staging -f compose.staging.yaml config --quiet
@@ -19,9 +19,37 @@ docker compose --env-file .env.production -f compose.production.yaml pull
 docker compose --env-file .env.production -f compose.production.yaml up -d --wait
 ```
 
-`STAGING_ENV_FILE` / `PRODUCTION_ENV_FILE` 仅用于显式选择对应服务环境文件，默认分别为 `.env.staging` / `.env.production`；`--env-file` 负责 Compose 变量展开。生产操作仍须经过下述备份与审批流程。旧 `compose.yaml` 和 `compose.app-only.yaml` 是兼容入口，不具备这两套环境隔离约束。
+`STAGING_ENV_FILE` / `PRODUCTION_ENV_FILE` 仅用于显式选择对应服务环境文件，默认分别为 `.env.staging` / `.env.production`；`--env-file` 负责 Compose 变量展开。生产操作仍须经过下述备份与审批流程。`compose.yaml` 和 `compose.app-only.yaml` 是本地/兼容入口，不具备这两套环境隔离约束，同样只绑定回环地址。
 
-镜像固定 Node.js 24 Alpine 基础摘要，用锁文件执行 `npm ci --omit=dev --ignore-scripts`，只复制运行时源码（包括 SQLite SQL 迁移）、生产依赖、公共资源和健康脚本。构建时将 OpenSSL 库升级到至少 3.5.8-r0，最终镜像移除 npm/npx/Yarn；不在运行容器安装依赖。Alpine 修复包来自构建时仓库，因此重建结果需重新扫描并记录最终摘要，不能仅凭基础摘要推定完整镜像相同。应用以 `node`、Caddy 以 UID/GID 1000 运行；两者根文件系统只读、先删除全部 capabilities、禁止提权，仅数据卷和有大小限制的 `/tmp` 可写。应用保持零 capabilities；Caddy 唯一加回 `NET_BIND_SERVICE`，用于官方二进制的文件 capability 和绑定 80/443，不能扩展该例外到应用。既有卷升级前需核对应用数据和 Caddy 子目录对 UID 1000 可写，不能靠放宽整个根文件系统权限解决。
+镜像固定 Node.js 24 Alpine 基础摘要，用锁文件执行 `npm ci --omit=dev --ignore-scripts`，只复制运行时源码（包括 SQLite SQL 迁移）、生产依赖、公共资源和健康脚本。构建时将 OpenSSL 库升级到至少 3.5.8-r0，最终镜像移除 npm/npx/Yarn；不在运行容器安装依赖。Alpine 修复包来自构建时仓库，因此重建结果需重新扫描并记录最终摘要，不能仅凭基础摘要推定完整镜像相同。应用以 `node` 用户运行，根文件系统只读、删除全部 capabilities、禁止提权，仅数据卷和有大小限制的 `/tmp` 可写。既有卷升级前需核对应用数据对 UID 1000 可写，不能靠放宽整个根文件系统权限解决。宿主机 Nginx 使用 Ubuntu 安全更新，不作为容器镜像拉取。
+
+### 宿主机 Nginx 与证书初始化
+
+先确认域名 A/AAAA 记录已指向本机，安全组只开放 TCP 22、80、443。安装 Ubuntu 包并建立 ACME 目录：
+
+```bash
+sudo apt update
+sudo apt install -y nginx certbot python3-certbot-nginx
+sudo install -d -o root -g www-data -m 0755 /var/www/certbot
+```
+
+把 `deploy/nginx-bootstrap.conf.example` 复制到 `/etc/nginx/sites-available/jiuyue-sports`，将其中 `sports.example.com` 替换为真实域名；禁用默认站点后先运行 `sudo nginx -t`，成功才 reload。然后执行 `sudo certbot certonly --webroot -w /var/www/certbot -d <真实域名>`。证书签发成功后，用同样替换过域名的 `deploy/nginx-site.conf.example` 覆盖站点配置，再执行 `sudo nginx -t && sudo systemctl reload nginx`。最后运行 `sudo certbot renew --dry-run` 并用 `systemctl list-timers | grep certbot` 确认自动续期任务存在。配置只把规范域名重定向到 HTTPS，并拒绝未知 HTTP Host 与 HTTPS SNI。任何一步失败都保留 bootstrap 配置，不得安装引用不存在证书的最终配置。
+
+### 从旧 Caddy 部署切换（仅一次）
+
+常规发布脚本会检查同一 Compose 项目中所有运行或停止的 `caddy` 服务容器；只要仍有遗留容器就会在拉取、停止或迁移应用之前拒绝发布。这样可防止旧容器继续占用 80/443、公开冒烟误测旧站点，或在回滚时调用已不兼容的 Caddy 版发布包。全新服务器不需要本节操作。
+
+已有 Caddy 部署必须安排维护窗口并人工完成一次切换：先创建并校验 SQLite 备份，记录当前 app 镜像摘要、旧发布包路径和旧 Caddy 配置，且保留原数据卷。然后从新版本交付文件建立一个独立保留的“仅 app”基线发布包，将 `APP_IMAGE` 明确设为当前运行镜像摘要，用该包的环境 Compose 执行 `up -d --wait --force-recreate app`，确认 `127.0.0.1:<APP_PORT>` 健康。此时再停止旧 Caddy，按上一节依次启用 Nginx bootstrap、签发证书、启用最终站点并验证公开 HTTPS；切换期间不要运行常规自动发布。
+
+若公开验证失败，停止 Nginx，使用保留的旧发布包和原镜像摘要重新创建 `app caddy`，验证旧公开路径后再排障。若验证成功，使用旧发布包执行 `docker compose ... rm -f caddy`，但在回滚保留期内继续保存旧包、配置与数据卷；用以下命令确认没有运行或停止的遗留容器：
+
+```bash
+docker ps -a \
+  --filter label=com.docker.compose.project=jiuyue-production \
+  --filter label=com.docker.compose.service=caddy
+```
+
+同时核对新 app 容器的 `com.docker.compose.project.working_dir` 与 `com.docker.compose.project.config_files` 标签确实指向保留的仅 app 基线包。将切换时间、当前 app 摘要和基线包绝对路径写入受控操作记录，并以 0600 权限同步 `.release-state/<environment>/current-image`、`current-bundle` 和注明 `manual-nginx-transition` 的 `result`；同步前这些字段仍是旧 Caddy 部署的历史状态，不得作为当前恢复依据。完成这些检查后，后续自动发布与回滚才以宿主机 Nginx 和仅 app 发布包为稳定基线；不得删除仍被 `current-bundle` 或 `previous-bundle` 引用的目录。
 
 ## 发布、迁移与回滚
 
@@ -40,11 +68,11 @@ staging 成功后，production 作业等待 GitHub `production` Environment 的 
 
 `deploy/deploy-release.sh staging|production` 记录 `.release-state/<environment>/previous-image`、`candidate-image`、成功或回滚后的 `current-image`，以及对应的 `previous-bundle`、`candidate-bundle`、`current-bundle`、`backup-path`、`migration-result` 和 `result`。目录权限为 0700，文件为 0600；GitHub summary 记录提交和最终镜像，Environment 审批记录由 GitHub 保留。失败输出报告失败阶段、已验证备份路径和前后发布包路径，不打印应用日志、环境展开值或业务响应。每次发布的这些主机记录会被下一次更新，应将不含个人信息的发布元数据归档到受控审计系统。
 
-前一摘要从实际运行容器读取，不能用猜测标签代替。前一发布包从 app/Caddy 容器的 Compose working_dir 与 config_files 标签核实；两者必须对应同一仍保留的发布包及单一环境 Compose 文件，且旧包不能与候选包为同一目录。旧 Compose 与 Caddyfile 必须保留原样；缺失、混用或覆盖旧包时在停止服务前拒绝发布，不能把候选配置当作恢复配置。备份失败时旧应用保持运行。
+前一摘要从实际运行容器读取，不能用猜测标签代替。前一发布包从 app 容器的 Compose working_dir 与 config_files 标签核实，必须对应同一仍保留的发布包及单一环境 Compose 文件，且旧包不能与候选包为同一目录。旧 Compose 必须保留原样；缺失、混用或覆盖旧包时在停止服务前拒绝发布，不能把候选配置当作恢复配置。备份失败时旧应用保持运行。
 
-停止后的迁移、就绪或冒烟失败会切回旧发布包中的 Compose/Caddy 配置及固定的 Caddy 镜像，并使用前一 app 摘要强制重新创建 app 与 Caddy 两个服务。容器就绪后，通过公开 origin 执行健康、页面、资源和登录/会话/退出验证，成功才记录 `rollback=restored` 与恢复后的 current-image/current-bundle；包括 staging 回滚在内，恢复检查始终使用 production 模式，不新增询盘。仅应用健康不能证明代理已经恢复。如果任一服务启动或公开路径恢复检查失败，记录 `rollback=rollback-failed`、保留备份和前后发布包路径并要求人工恢复；发布自身始终非零退出。current 字段表示最后验证成功的部署，不应脱离本次 result 判断当前状态。
+停止后的迁移、就绪或冒烟失败会切回旧发布包中的 Compose，并使用前一 app 摘要强制重新创建应用服务。宿主机 Nginx 和证书不随应用发布切换。容器就绪后，通过公开 origin 执行健康、页面、资源和登录/会话/退出验证，成功才记录 `rollback=restored` 与恢复后的 current-image/current-bundle；包括 staging 回滚在内，恢复检查始终使用 production 模式，不新增询盘。仅应用健康不能证明 Nginx 公开路径已经恢复。如果应用启动或公开路径恢复检查失败，记录 `rollback=rollback-failed`、保留备份和前后发布包路径并要求人工恢复；发布自身始终非零退出。current 字段表示最后验证成功的部署，不应脱离本次 result 判断当前状态。
 
-首次 staging 没有旧容器时可以初始化，失败则停止候选 app 与 Caddy；如果只有既存代理而没有应用，则拒绝自动接管。production 必须已有使用摘要的应用、可恢复的代理发布包和可验证的数据库，首次生产初始化属于单独审批的切换。脚本不删除数据卷、不恢复数据库备份、不逆向修改迁移历史。检查失败后的人工恢复须评估备份时间之后的新数据。
+首次 staging 没有旧容器时可以初始化，失败则停止候选 app。production 必须已有使用摘要的应用、可恢复的应用发布包和可验证的数据库，首次生产初始化属于单独审批的切换。脚本不安装或修改 Nginx，不删除数据卷、不恢复数据库备份、不逆向修改迁移历史。检查失败后的人工恢复须评估备份时间之后的新数据。
 
 `deploy/release-db.mjs` 只允许保守的扩展 SQL：新建表、普通索引、为已有表增加无约束的可空 TEXT/INTEGER/REAL/BLOB 列。数据改写、删除、重命名、触发器、唯一索引及现有表的新约束都会拒绝；更复杂但可能安全的 SQL 也可能被拒绝，须单独设计审查，不能扩大匹配规则来绕过审批。整个迁移事务在失败时回滚。应用迁移器允许数据库含有高于当前镜像最高版本的历史，但当前镜像携带的迁移必须全部存在并匹配校验和，历史中缺失的中间版本仍拒绝，绝不自动 down-migrate。实际可回滚性仍依赖旧程序与新表结构兼容。
 
@@ -66,9 +94,9 @@ staging 成功后，production 作业等待 GitHub `production` Environment 的 
 | `SMOKE_BASE_URL` | 对应公开 HTTPS origin，例如 `https://staging.your-domain.tld`；生产必须是生产域名 |
 | `SMOKE_ADMIN_PASSWORD` | 对应环境管理员口令，用于登录/会话/退出；不放在命令行参数或传输包 |
 
-目标主机需 Linux、Docker Engine、支持 `up --wait --wait-timeout` 的 Compose v2、Node.js 24+、OpenSSH、tar、grep 和 util-linux `flock`；部署账户须可创建发布目录、读 `.env.<environment>` 并操作本环境 Docker 项目。`DEPLOY_PATH/.env.staging` 或 `.env.production` 按前文先配置，Caddy 的 DNS/80/443/证书前提也须已就绪。私有 GHCR 镜像需要主机预先使用仅 `read:packages` 的受限凭据登录；工作流不会把写 registry 的 GitHub token 发送到主机。SSH 凭据严格验证 known_hosts，不开启 agent forwarding。
+目标主机需 Linux、Docker Engine、支持 `up --wait --wait-timeout` 的 Compose v2、Node.js 24+、Nginx、Certbot、OpenSSH、tar、grep 和 util-linux `flock`；部署账户须可创建发布目录、读 `.env.<environment>` 并操作本环境 Docker 项目，但不需要 Nginx root 权限。`DEPLOY_PATH/.env.staging` 或 `.env.production` 按前文先配置，Nginx 的 DNS/80/443/证书前提也须已就绪。私有 GHCR 应用镜像需要主机预先使用仅 `read:packages` 的受限凭据登录；工作流不会把写 registry 的 GitHub token 发送到主机。SSH 凭据严格验证 known_hosts，不开启 agent forwarding。
 
-工作流只传输两份 Compose 文件、Caddy 配置及发布/备份/冒烟脚本，保存至 `releases/<sha>-<run-id>-<attempt>`，不传源码、`.env` 或数据库。服务器只拉取镜像，不构建。发布目录属于部署账户；挂载进只读非 root 容器的脚本和 Caddy 配置具有只读访问权限。环境数据卷仍由原 Compose 项目名固定，绝不能更改项目名。保留上一版本的发布目录供恢复；目录清理需另行按保留规则处理。Docker 重启按现有容器摘要恢复；手动 Compose 操作前必须显式导出记录的 `current-image` 为 `APP_IMAGE`，因为服务器 `.env` 内的初始标签不会被脚本重写。
+工作流只传输两份 Compose 文件及发布/备份/冒烟脚本，保存至 `releases/<sha>-<run-id>-<attempt>`，不传源码、`.env`、Nginx 配置、证书或数据库。服务器只拉取应用镜像，不构建。发布目录属于部署账户；挂载进只读非 root 容器的脚本具有只读访问权限。环境数据卷仍由原 Compose 项目名固定，绝不能更改项目名。保留上一版本的发布目录供恢复；目录清理需另行按保留规则处理。Docker 重启按现有容器摘要恢复；手动 Compose 操作前必须显式导出记录的 `current-image` 为 `APP_IMAGE`，因为服务器 `.env` 内的初始标签不会被脚本重写。
 
 ### 冒烟与备份边界
 
@@ -149,7 +177,7 @@ node deploy/smoke-test.mjs https://<staging-domain> staging
 
 `GET /api/health/live` 返回 `live: true` 只说明 HTTP 进程能响应，不依赖数据库。`GET /api/health` 是就绪检查：成功响应含 `live: true`、`ready: true`、`database: "ready"`；它执行 SQLite 读取及 SAVEPOINT 内真实更新，随后回滚，不改变迁移记录。关闭、锁定、只读或写入失败时返回安全的 503 错误封装，不泄露数据库细节。业务存储失败后，就绪检查最多每 5 秒尝试一次固定的恢复探测，在同一个回滚 SAVEPOINT 中对预约、统计、会话和审计表执行最小合法的虚构写入；仍有表级写入故障则继续返回 503。探测成功并完整回滚后清除故障标记，无需普通请求或后台清理恢复服务。无关业务操作成功不会清除故障标记；探测不保留用户数据、不重试失败的用户请求、不提交测试行。
 
-镜像默认执行 `node deploy/healthcheck.mjs readiness`；需要单独检查进程时执行 `node deploy/healthcheck.mjs liveness`。脚本读取容器 `PORT`，超时或无效响应返回非零，不打印响应和秘密。Docker 每 30 秒检查、连续 3 次失败标记 unhealthy；Compose 启动时等待应用健康。Caddy 每 10 秒检查就绪状态，失败后停用上游，恢复后重新接入；检查之间存在短暂延迟。单纯 unhealthy 不会触发 Docker 的 restart 策略，须配合监控与人工处置，禁止把重启策略当作数据库修复机制。
+镜像默认执行 `node deploy/healthcheck.mjs readiness`；需要单独检查进程时执行 `node deploy/healthcheck.mjs liveness`。脚本读取容器 `PORT`，超时或无效响应返回非零，不打印响应和秘密。Docker 每 30 秒检查、连续 3 次失败标记 unhealthy；Compose 启动时等待应用健康。Nginx 通过回环 upstream 转发，公开监控负责从 HTTPS 入口验证端到端状态。单纯 unhealthy 不会触发 Docker 的 restart 策略，须配合监控与人工处置，禁止把重启策略当作数据库修复机制。
 
 生产镜像同时携带显式白名单中的 SQLite 备份、验证、恢复、JSON 导入及监控脚本；不包含 systemd 安装、凭据生成或 Docker 客户端。监控的 Docker inspection 在授权主机执行，不能在应用容器中挂载 Docker socket。
 
@@ -169,7 +197,7 @@ node deploy/monitor-health.mjs --origin https://<real-domain> --database <absolu
 | `DISK_LOW` / `DISK_CHECK_FAILED` | 数据盘可用空间小于 1 GiB 或采集失败，扩容/核实挂载；禁止先删未经验证的数据 |
 | `CONTAINER_DOWN` / `CONTAINER_CHECK_FAILED` | 核实目标容器正在运行、未 restarting 以及采集权限 |
 | `CONTAINER_RESTARTS` | 当前容器自创建累计重启至少 3 次；调查原因，记录后可重新创建容器重置计数 |
-| `CERTIFICATE_EXPIRING` / `CERTIFICATE_CHECK_FAILED` | 剩余不超过 14 天或握手/信任/域名检查失败，修复 Caddy 续期、DNS 和网络 |
+| `CERTIFICATE_EXPIRING` / `CERTIFICATE_CHECK_FAILED` | 剩余不超过 14 天或握手/信任/域名检查失败，检查 Certbot timer、续期日志、DNS 和网络 |
 | `BACKUP_STALE` / `BACKUP_UNVERIFIED` | 最新生成备份超过 36 小时、时间在未来、缺失或验证失败；检查 timer/磁盘，重新备份并核实异地副本 |
 | `SQLITE_FAILED` | 主库完整性、外键、迁移或读取失败，停止写入并进入恢复程序 |
 | `MONITOR_CONFIGURATION` | 修正缺失参数/非法 origin；不可将配置错误当作健康 |
@@ -196,6 +224,6 @@ node tools/import-json-data.mjs --source ./protected/site-data.json --database .
 
 生产切换前必须完成 staging 全链路演练、旧数据导入核对以及备份恢复演练。确认 DNS、HTTPS、反向代理、密钥、监控与告警、回滚镜像和负责人可用；按发布流程切换后执行生产烟测。任何前置验证失败都应停止切换，修复并重新验证，而不是绕过检查。
 
-本地替代演练（仅有 Docker 时）：构建后执行 `RECOVERY_IMAGE=jiuyue-sports:recovery node --test tests/deployment/recovery-compose.test.mjs`，镜像先用 `docker build -t jiuyue-sports:recovery .` 构建。PowerShell 使用 `$env:RECOVERY_IMAGE='jiuyue-sports:recovery'` 后执行同一 Node 命令。测试把输入镜像解析成不可变本机 image ID，创建唯一 `jy-recovery-<random>` Compose 项目、Caddy 回环 HTTP 代理及临时合成数据卷；导入 2 条询盘、3 条事件，加入虚构会话/审计，执行全套 staging HTTP 冒烟，在线备份，停止应用并保全移走原数据库，恢复至空目标，逐表比较计数/摘要，重启后再次执行同套公开/管理烟测，再验证替换已有库的安全备份和 Linux 0600/UID 1000。测试结束只移除它自己创建的项目及合成数据卷，不读取现有 `.env` 或生产卷。未设置 `RECOVERY_IMAGE` 时此独立测试跳过，不算验收成功；它不在默认 `npm test` 中自动运行。
+本地替代演练（仅有 Docker 时）：构建后执行 `RECOVERY_IMAGE=jiuyue-sports:recovery node --test tests/deployment/recovery-compose.test.mjs`，镜像先用 `docker build -t jiuyue-sports:recovery .` 构建。PowerShell 使用 `$env:RECOVERY_IMAGE='jiuyue-sports:recovery'` 后执行同一 Node 命令。测试把输入镜像解析成不可变本机 image ID，创建唯一 `jy-recovery-<random>` Compose 项目、随机回环 HTTP 端口及临时合成数据卷；导入 2 条询盘、3 条事件，加入虚构会话/审计，执行全套 staging HTTP 冒烟，在线备份，停止应用并保全移走原数据库，恢复至空目标，逐表比较计数/摘要，重启后再次执行同套公开/管理烟测，再验证替换已有库的安全备份和 Linux 0600/UID 1000。测试结束只移除它自己创建的项目及合成数据卷，不读取现有 `.env` 或生产卷。未设置 `RECOVERY_IMAGE` 时此独立测试跳过，不算验收成功；它不验证宿主机 Nginx 或公网 TLS，也不在默认 `npm test` 中自动运行。
 
 真实 staging/production 未配置时，只能记录本地演练和 [只读切换预检](../DEPLOYMENT-CHECKLIST.md#切换前只读预检及证据)；DNS、防火墙、GitHub 审批、部署 secrets、异地复制、公网证书、监控收件与运维访问必须保留为未验证。不能把本地 HTTP 或本机 image ID 当作已推送的 registry digest、公网 HTTPS 或真实 staging 发布证据。

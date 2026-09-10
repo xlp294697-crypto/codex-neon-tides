@@ -13,10 +13,10 @@
 
 ## 域名、网络与 HTTPS
 
-- [ ] `.env` 中 `SITE_DOMAIN` 已从 `replace.example.com` 改为真实域名。
+- [ ] Nginx 配置中的 `sports.example.com` 已替换为真实域名，且 `nginx -t` 通过。
 - [ ] Docker 方案运行在 Linux 或受支持的 Linux 容器环境；没有把 Alpine 镜像方案误当作标准 Windows Server 容器部署。
 - [ ] 域名 A/AAAA 记录只指向正确服务器，旧记录已清理。
-- [ ] 公网只开放必要的 TCP 80、TCP 443；需要 HTTP/3 时才开放 UDP 443。
+- [ ] 公网只开放必要的 TCP 80、TCP 443；应用端口 3002 和 UDP 443 均未开放。
 - [ ] 同机反向代理保持 Docker `APP_BIND_IP=127.0.0.1` 或原生 `HOST=127.0.0.1`；独立硬件代理按运行方式把对应变量设为服务器固定私网 IP，且主机防火墙只允许该代理源 IP 访问 3002。
 - [ ] HTTPS 证书有效、自动续期已验证，HTTP 会跳转 HTTPS。
 - [ ] 管理后台只能通过 HTTPS 正常登录；Cookie 带 Secure、HttpOnly、SameSite 属性。
@@ -29,7 +29,7 @@
 - [ ] Windows 自启使用普通账户的 S4U、Limited 任务并固定 Node.js 24+ 绝对路径，没有使用 SYSTEM；`.env`、`data`、`backups` ACL 已复核。
 - [ ] Linux 代码和 unit 由 root 持有，`jiuyue` 只能写 `data`；只有备份 unit 能写 `backups`。
 - [ ] 只有确需处理询盘的人员能访问后台，人员变动时立即更换密码。
-- [ ] 服务器、Docker、Node.js、Caddy/Nginx 和操作系统已安装安全更新。
+- [ ] 服务器、Docker、Node.js、Nginx、Certbot 和操作系统已安装安全更新。
 - [ ] 服务器时间和时区正确，并启用可靠的时间同步。
 
 ## 功能验收
@@ -75,7 +75,7 @@
 | 异地恢复 | 存储控制台只读检查已配置的加密、权限、生命周期和最新复制状态 | 远端取回并验证/实际恢复记录；仅本地副本不满足 |
 | 导入计数 | `node tools/import-json-data.mjs --source <protected-source> --database <target> --dry-run` | 两表 `source = imported + skipped`、重复导入结果，禁止输出记录 |
 | 监控目的地 | 监控平台只读查看探测与路由、值班安排 | 7 项探测、15 分钟失联报警、真实测试告警收件确认 |
-| Caddy/HTTPS | `curl --silent --show-error --head https://<domain>/`、`openssl s_client -connect <domain>:443 -servername <domain> </dev/null 2>/dev/null \| openssl x509 -noout -dates` | 可信证书、域名匹配、续期证据、HTTP 跳转、剩余大于 14 天 |
+| Nginx/HTTPS | `sudo nginx -t`、`sudo certbot renew --dry-run`、`curl --silent --show-error --head https://<domain>/`、`openssl s_client -connect <domain>:443 -servername <domain> </dev/null 2>/dev/null \| openssl x509 -noout -dates` | 配置通过、可信证书、域名匹配、自动续期、HTTP 跳转、剩余大于 14 天 |
 | 运维访问 | `ssh <configured-host> 'id; command -v docker; command -v node'`（不得关闭主机密钥校验） | 两名授权人员、密钥轮换/应急访问和主机指纹 |
 
 - [ ] staging 仅含明确虚构数据；同一候选摘要完成全部公共/管理冒烟和浏览器流程。

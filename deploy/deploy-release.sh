@@ -39,9 +39,9 @@ finish() {
       APP_IMAGE=$previous
       bundle=$previous_bundle
       export APP_IMAGE
-      # Restore both services from the retained prior Compose/Caddy bundle.
-      # Container readiness alone cannot prove that the public proxy recovered.
-      if compose up -d --wait --wait-timeout 120 --force-recreate app caddy >/dev/null 2>&1 &&
+      # Nginx and TLS are host infrastructure; rollback only replaces the app.
+      # Container readiness alone cannot prove that the public route recovered.
+      if compose up -d --wait --wait-timeout 120 --force-recreate app >/dev/null 2>&1 &&
         node "$candidate_bundle/deploy/smoke-test.mjs" "$SMOKE_BASE_URL" production; then
         printf '%s\n' "$previous" > "$state/current-image"
         printf '%s\n' "$previous_bundle" > "$state/current-bundle"
@@ -52,8 +52,8 @@ finish() {
         echo 'Deployment rollback failed; operator recovery required. Database was not reverted.' >&2
       fi
     elif [ "$replaced" = 1 ]; then
-      compose stop app caddy >/dev/null 2>&1 || true
-      echo 'No previous deployment; failed initial staging services stopped.' >&2
+      compose stop app >/dev/null 2>&1 || true
+      echo 'No previous deployment; failed initial staging application stopped.' >&2
     fi
     printf 'failed %s rollback=%s backup=%s previous-bundle=%s candidate-bundle=%s\n' "$stage" "$rollback_result" "$backup_path" "$previous_bundle" "$candidate_bundle" > "$state/result"
   fi
@@ -62,28 +62,28 @@ finish() {
 trap finish EXIT
 trap 'exit 1' HUP INT TERM
 compose config --quiet >/dev/null 2>&1
+compose_project="jiuyue-$environment"
+legacy_caddy=$(docker ps -aq \
+  --filter "label=com.docker.compose.project=$compose_project" \
+  --filter 'label=com.docker.compose.service=caddy')
+[ -z "$legacy_caddy" ] || {
+  echo 'Legacy Caddy deployment requires explicit transition before automated release' >&2
+  exit 1
+}
 container=$(compose ps -q app)
-caddy_container=$(compose ps -a -q caddy)
 if [ -n "$container" ]; then
   previous=$(docker inspect --format '{{.Config.Image}}' "$container")
   printf '%s\n' "$previous" | grep -Eq '^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$' || { echo 'Previous image must be digest-qualified' >&2; exit 1; }
-  [ -n "$caddy_container" ] || { echo 'Previous proxy deployment is missing' >&2; exit 1; }
   previous_bundle=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$container")
-  [ -d "$previous_bundle" ] || { echo 'Previous deployment bundle is unavailable' >&2; exit 1; }
+  [ -d "$previous_bundle" ] || { echo 'Previous application bundle is unavailable' >&2; exit 1; }
   previous_bundle=$(CDPATH='' cd -- "$previous_bundle" && pwd)
   [ "$previous_bundle" != "$candidate_bundle" ] || { echo 'Release requires a distinct retained previous bundle' >&2; exit 1; }
-  [ -f "$previous_bundle/compose.$environment.yaml" ] && [ -f "$previous_bundle/deploy/Caddyfile.docker" ] || { echo 'Previous deployment configuration is unavailable' >&2; exit 1; }
-  for prior_container in "$container" "$caddy_container"; do
-    prior_directory=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$prior_container")
-    prior_files=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$prior_container")
-    [ "$prior_directory" = "$previous_bundle" ] && [ "$prior_files" = "$previous_bundle/compose.$environment.yaml" ] || { echo 'Previous application and proxy configuration do not share a recoverable bundle' >&2; exit 1; }
-  done
+  [ -f "$previous_bundle/compose.$environment.yaml" ] || { echo 'Previous deployment configuration is unavailable' >&2; exit 1; }
+  prior_files=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$container")
+  [ "$prior_files" = "$previous_bundle/compose.$environment.yaml" ] || { echo 'Previous application configuration is not a recoverable bundle' >&2; exit 1; }
   (bundle=$previous_bundle; APP_IMAGE=$previous; export APP_IMAGE; compose config --quiet >/dev/null 2>&1)
 elif [ "$environment" = production ]; then
   echo 'Production requires an existing digest-qualified application and database' >&2
-  exit 1
-elif [ -n "$caddy_container" ]; then
-  echo 'Existing proxy without an application requires operator recovery' >&2
   exit 1
 fi
 printf '%s\n' "$previous" > "$state/previous-image"
@@ -113,7 +113,7 @@ stage=migrate
 export ROLLBACK_SCHEMA_COMPATIBLE
 compose run --rm --no-deps -T --pull never -e ROLLBACK_SCHEMA_COMPATIBLE -v "$bundle/deploy:/release:ro" app node /release/release-db.mjs migrate > "$state/migration-result" 2>/dev/null
 stage=readiness
-compose up -d --wait --wait-timeout 120 app caddy >/dev/null 2>&1
+compose up -d --wait --wait-timeout 120 app >/dev/null 2>&1
 stage=smoke
 node "$bundle/deploy/smoke-test.mjs" "$SMOKE_BASE_URL" "$environment"
 stage=record
