@@ -7,7 +7,7 @@
 - 后台询盘列表、跟进状态、删除功能；
 - 经访客单独同意后启用的站内流量与内容互动统计；
 - 无默认密码的后台认证、登录限流、CSRF 防护、请求体限制和安全响应头；
-- Docker 自动 HTTPS、既有反向代理接入、Windows/Linux 原生运行、开机自启和备份脚本。
+- Docker 应用、宿主机 Nginx/Certbot HTTPS、既有反向代理接入、Windows/Linux 原生运行、开机自启和备份脚本。
 
 运行数据保存在 SQLite（默认 `data/site.db`，可通过 `DATA_PATH` 指定）。交付包中的旧 `data/site-data.json` 仅是空迁移源示例，不包含制作电脑上的真实访问记录、询盘、日志、密码或会话密钥。原始证照资料也不会随包交付，网站只使用 `public/media/` 中的发布版图片。
 
@@ -33,14 +33,14 @@ https://你的域名/
 正确链路是：
 
 ```text
-访客浏览器 → 域名 DNS → 服务器 443/HTTPS → Caddy 或 Nginx → 网站程序 3002 内部端口
+访客浏览器 → 域名 DNS → 服务器 443/HTTPS → 宿主机 Nginx → 127.0.0.1:3002 → 网站程序
 ```
 
 不要把 `3002` 端口直接暴露到公网，也不要把 `127.0.0.1` 发给客户。后台地址是 `https://你的域名/admin`，官网不公开展示后台入口。
 
-## 推荐方案：Docker + 自动 HTTPS
+## 推荐方案：Docker 应用 + 宿主机 Nginx/Certbot
 
-适合已经安装 Docker Compose、拥有公网 IP 和域名的 Linux 服务器。镜像基于 Linux；Windows 10/11 只有在已配置受支持的 Linux 容器运行时后才能使用这条路径。Docker Desktop 官方不支持 Windows Server，标准 Windows Server Docker 运行时也不能直接运行本包的 Alpine Linux 镜像；Windows Server 请使用下文“Windows 原生运行”，或先建立受支持的 Linux 虚拟机。`compose.yaml` 会同时启动网站和 Caddy；Caddy 根据域名自动申请和续期 HTTPS 证书。
+适合已经安装 Docker Compose、拥有公网 IP 和域名的 Linux 服务器。镜像基于 Linux；Windows 10/11 只有在已配置受支持的 Linux 容器运行时后才能使用这条路径。Docker Desktop 官方不支持 Windows Server，标准 Windows Server Docker 运行时也不能直接运行本包的 Alpine Linux 镜像；Windows Server 请使用下文“Windows 原生运行”，或先建立受支持的 Linux 虚拟机。`compose.yaml` 只启动网站并把 3002 绑定到宿主机回环地址；Nginx 和 Certbot 由 Ubuntu 软件源安装并作为系统服务运行。
 
 ### 1. 解压并初始化安全配置
 
@@ -61,21 +61,9 @@ powershell -ExecutionPolicy Bypass -File .\tools\Initialize-Config.ps1
 
 初始化脚本会安全读取你设置的后台密码；密码必须为 16–250 位，并至少包含大写字母、小写字母、数字、符号中的三类，且不得包含常见弱口令、品牌词或手机号码。脚本只把不可逆的 scrypt 哈希和随机会话密钥写入 `.env`；程序没有默认后台密码。机器只有 Docker、没有 Node.js 时，初始化脚本会使用一次性 Node 容器生成配置。
 
-### 2. 填写真实域名
+### 2. 设置应用与真实域名
 
-编辑 `.env`，把：
-
-```text
-SITE_DOMAIN=replace.example.com
-```
-
-改为实际域名，例如：
-
-```text
-SITE_DOMAIN=sports.example.cn
-```
-
-不要加 `http://`、`https://`、路径或端口。
+应用 `.env` 不保存域名。选择实际域名后，把 `deploy/nginx-bootstrap.conf.example` 和 `deploy/nginx-site.conf.example` 中的 `sports.example.com` 替换为该域名；只填写主机名，不加 `http://`、`https://`、路径或端口。
 
 若已经取得 ICP 备案号，同时填写：
 
@@ -96,18 +84,20 @@ REPORT_TIME_ZONE=Asia/Shanghai
 ### 3. 配置 DNS 和防火墙
 
 - 域名 `A` 记录指向服务器公网 IPv4；使用 IPv6 时再添加正确的 `AAAA` 记录。
-- 路由器或云安全组向服务器开放 TCP `80`、TCP `443`，如使用 HTTP/3 可同时开放 UDP `443`。
+- 路由器或云安全组向服务器开放 TCP `80`、TCP `443`。
 - 不对公网开放 `3002`。
 - 若服务器位于中国大陆，按接入商和主管部门的现行要求完成网站备案、主体信息展示等上线手续。
 
-### 4. 启动
+### 4. 启动应用并配置 HTTPS
 
 ```bash
 docker compose config >/dev/null
-docker compose up -d --build
+docker compose up -d --build app
 docker compose ps
-docker compose logs --tail=100 app caddy
+docker compose logs --tail=100 app
 ```
+
+宿主机安装 Nginx、使用 bootstrap 配置完成 HTTP-01 验证、申请证书，再启用最终 TLS 配置。完整命令和失败回退顺序见 [运维指南](docs/operations.md#宿主机-nginx-与证书初始化)。启用最终配置前必须依次通过 `nginx -t` 和 `certbot renew --dry-run`。
 
 验证：
 
@@ -123,7 +113,7 @@ curl -fsS https://你的域名/api/health
 
 Compose 已配置 `restart: unless-stopped`，正常重启或断电恢复后 Docker 会自动拉起服务；仍需确认 Docker 服务本身已设为开机启动。
 
-## 已有 Nginx、Caddy 或硬件反向代理
+## 已有 Nginx 或硬件反向代理
 
 如果硬件层已经负责域名和 HTTPS，只启动应用：
 
@@ -134,7 +124,6 @@ docker compose -f compose.app-only.yaml up -d --build
 
 默认 `APP_BIND_IP=127.0.0.1`，因此应用只在服务器回环地址监听 `127.0.0.1:3002`，适合同一台服务器上的代理。把同机代理上游指向该地址。示例位于：
 
-- `deploy/Caddyfile.example`
 - `deploy/nginx-site.conf.example`
 
 替换示例域名和证书路径后再启用。代理必须覆盖客户端传入的 `X-Forwarded-For`，不能原样信任公网请求头；随包 Nginx 示例已使用真实连接地址覆盖。
@@ -156,7 +145,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\Initialize-Config.ps1
 .\Start-Windows.ps1
 ```
 
-也可双击 `启动网站.cmd` 进行前台运行。正式服务仍应由 Caddy/Nginx 提供 HTTPS，`.env` 中保持：
+也可双击 `启动网站.cmd` 进行前台运行。正式服务仍应由 Nginx 提供 HTTPS，`.env` 中保持：
 
 ```text
 HOST=127.0.0.1
@@ -207,7 +196,7 @@ sudo systemctl enable --now jiuyue-sports
 sudo systemctl status jiuyue-sports
 ```
 
-代码由 root 持有且对服务账户只读；只有 `data` 和 `backups` 归 `jiuyue` 所有。先确认 Node.js 的实际路径是 unit 中的 `/usr/bin/node`，否则先修改 `ExecStart`。然后安装 Caddy 或 Nginx，使用 `deploy/` 中的反向代理示例。默认应用服务只监听回环地址；若 Linux 原生方式对接另一台硬件代理，同样把 `.env` 的 `HOST` 改成服务器固定私网 IP，并设置来源白名单。
+代码由 root 持有且对服务账户只读；只有 `data` 和 `backups` 归 `jiuyue` 所有。先确认 Node.js 的实际路径是 unit 中的 `/usr/bin/node`，否则先修改 `ExecStart`。然后安装 Nginx/Certbot，使用 `deploy/` 中的反向代理示例。默认应用服务只监听回环地址；若 Linux 原生方式对接另一台硬件代理，同样把 `.env` 的 `HOST` 改成服务器固定私网 IP，并设置来源白名单。
 
 启用每日备份定时器：
 
@@ -312,7 +301,8 @@ node --test
 
 ## 官方部署参考
 
-- [Caddy 自动 HTTPS 的域名、端口与持久化要求](https://caddyserver.com/docs/automatic-https)
+- [Nginx 反向代理模块](https://nginx.org/en/docs/http/ngx_http_proxy_module.html)
+- [Certbot 证书续期](https://eff-certbot.readthedocs.io/en/stable/using.html#renewing-certificates)
 - [Node.js 官方 Docker 镜像与可用架构](https://github.com/nodejs/docker-node)
 - [Node.js 容器安全最佳实践](https://github.com/nodejs/docker-node/blob/main/docs/BestPractices.md)
 - [Docker Desktop 的 Windows 支持边界（不支持 Windows Server）](https://docs.docker.com/desktop/setup/install/windows-install/)

@@ -4,14 +4,14 @@
 
 恢复回归同时覆盖扩展迁移后的旧版本备份/健康检查、新版监控读取部署前备份、恢复的严格兼容性，以及数据库文件刚发布时的完整监控探测。路径测试从含空格和非 ASCII 字符的临时工具目录执行备份、验证及恢复。Compose 演练通过标准输入把虚构 JSON 送入容器，由 UID 1000 在数据卷内创建 0600 文件，验证 UID 1000 可读且 UID 1001 被拒绝；不把宿主机账户的私有 JSON 文件绑定挂载给容器，也不假设宿主机 UID 为 1000。
 
-恢复专项：`node --test tests/integration/backup-restore.test.mjs tests/integration/monitor-health.test.mjs` 验证 WAL 快照、可移动 SHA-256、完整性/外键、迁移兼容、安全备份、停止声明、留存以及监控失败代码。实际本地容器演练先 `docker build -t jiuyue-sports:recovery .`，再设置 `RECOVERY_IMAGE=jiuyue-sports:recovery` 运行 `node --test tests/deployment/recovery-compose.test.mjs`（PowerShell 用 `$env:RECOVERY_IMAGE`）。此测试显式创建并清理它自己的 Compose 项目及虚构数据卷，经 Caddy 回环 HTTP 执行恢复前后的 staging 冒烟，不读取用户 `.env`、不连接生产。独立运行且没有镜像变量时跳过；不能将跳过记为恢复验证，也不替代公网 TLS、真实 staging 或异地恢复。完整过程和限制见运维指南。
+恢复专项：`node --test tests/integration/backup-restore.test.mjs tests/integration/monitor-health.test.mjs` 验证 WAL 快照、可移动 SHA-256、完整性/外键、迁移兼容、安全备份、停止声明、留存以及监控失败代码。实际本地容器演练先 `docker build -t jiuyue-sports:recovery .`，再设置 `RECOVERY_IMAGE=jiuyue-sports:recovery` 运行 `node --test tests/deployment/recovery-compose.test.mjs`（PowerShell 用 `$env:RECOVERY_IMAGE`）。此测试显式创建并清理它自己的 Compose 项目及虚构数据卷，经应用的随机回环 HTTP 端口执行恢复前后的 staging 冒烟，不读取用户 `.env`、不连接生产。独立运行且没有镜像变量时跳过；不能将跳过记为恢复验证，也不替代宿主机 Nginx、公网 TLS、真实 staging 或异地恢复。完整过程和限制见运维指南。
 
 ## 四个测试层
 
 1. **单元测试**：覆盖配置校验、输入规范化、密码校验、统计聚合、时区换算、保留策略和错误映射等纯逻辑；必须快速且互不共享状态。
 2. **集成测试**：以临时 SQLite 数据库启动真实应用，覆盖预约生命周期、事务/约束/迁移、会话、CSRF、请求体限制、限流、统计同意边界，以及数据库不可写、损坏或迁移失败。
 3. **端到端测试**：以 Playwright 在桌面和移动视口覆盖官网、隐私页、导航、媒体、同意选择、画廊、预约、后台处理与删除；检查 JavaScript 错误、失败请求、资源 404、基本可访问性和关键截图。
-4. **部署与恢复测试**：验证最终 Docker 镜像健康检查、全新数据库初始化、旧数据库迁移、备份与恢复、Caddy 反向代理以及预发布线上冒烟流程。
+4. **部署与恢复测试**：验证最终 Docker 镜像健康检查、回环端口约束、全新数据库初始化、旧数据库迁移、备份与恢复、Nginx 配置约束以及预发布线上冒烟流程。
 
 ## 夹具规则
 
@@ -54,7 +54,7 @@ Playwright 的每个测试通过真实 `createApp` 启动仅监听回环地址�
 
 E2E 安装 Playwright 锁定版本匹配的真实 Chromium 和 Linux 系统依赖，运行现有桌面及 Pixel 7 视口项目；CI 使用两个 worker、禁止 `test.only`、不重试失败。不上传浏览器 HTML 报告、截图或会话诊断。生产依赖使用 `npm ci --omit=dev --ignore-scripts` 后运行 `npm audit --omit=dev --audit-level=high`，任何 HIGH/CRITICAL 报告或审计服务错误均导致失败；该审计不区分是否已有修复。
 
-Docker 作业执行 `docker build -t jiuyue-sports:ci .`，设置 `RECOVERY_IMAGE=jiuyue-sports:ci` 运行现有 Compose 恢复测试，验证该镜像的启动、SQLite 导入、备份恢复和 Caddy 冒烟，再将镜像保存为保留 1 天的当前运行 artifact；扫描作业下载此镜像归档并直接扫描，不重新构建或发布镜像。固定版本 Trivy 检查镜像内 OS 与应用包漏洞，以可修复的 HIGH/CRITICAL 发现使作业失败，SARIF 限定相同严重等级。扫描禁用隐式仓库配置和忽略列表；Trivy 二进制版本需人工随 Action 更新一起评估。SARIF 在发现漏洞时仍上传 GitHub Code Scanning，并作为保留 7 天的 artifact 保存；扫描器在生成报告前出错则作业失败且没有可上传报告。
+Docker 作业执行 `docker build -t jiuyue-sports:ci .`，设置 `RECOVERY_IMAGE=jiuyue-sports:ci` 运行现有 Compose 恢复测试，验证该镜像的启动、SQLite 导入、备份恢复和回环端口冒烟，再将镜像保存为保留 1 天的当前运行 artifact；扫描作业下载此镜像归档并直接扫描，不重新构建或发布镜像。固定版本 Trivy 检查镜像内 OS 与应用包漏洞，以可修复的 HIGH/CRITICAL 发现使作业失败，SARIF 限定相同严重等级。扫描禁用隐式仓库配置和忽略列表；Trivy 二进制版本需人工随 Action 更新一起评估。SARIF 在发现漏洞时仍上传 GitHub Code Scanning，并作为保留 7 天的 artifact 保存；扫描器在生成报告前出错则作业失败且没有可上传报告。
 
 工作流默认只有 `contents: read`；仅扫描作业声明 `security-events: write`，并授予私有仓库 SARIF 上传所需的 `actions: read`，checkout 不保留凭据。没有 `pull_request_target`、部署凭据、镜像仓库写权限或发布步骤。GitHub 可能进一步收紧 fork/Dependabot 的令牌权限；PR 事件遵循 GitHub 对 SARIF 上传的授权规则。仓库必须支持并启用 Code Scanning（私有仓库还需对应功能授权），否则上传失败会显示为检查失败，不静默放行。权限依据见 [GitHub SARIF 上传文档](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/integrate-with-existing-tools/upload-sarif-file)。
 

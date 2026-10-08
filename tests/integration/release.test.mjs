@@ -211,10 +211,10 @@ for (const failure of [
   'readiness',
   'smoke',
   'rollback',
-  'caddy',
   'public-route',
   'rollback-public',
   'bundle-mismatch',
+  'legacy-caddy',
 ]) {
   test(`production release ${failure ? `rolls back on ${failure} failure` : 'backs up before replacement and records the digest'}`, async (t) => {
     const directory = await mkdtemp(path.join(tmpdir(), 'jy-release-shell-'));
@@ -227,10 +227,6 @@ for (const failure of [
       path.join(root, 'compose.production.yaml'),
       path.join(previousBundle, 'compose.production.yaml'),
     );
-    await cp(
-      path.join(root, 'deploy/Caddyfile.docker'),
-      path.join(previousBundle, 'deploy/Caddyfile.docker'),
-    );
     const shellPath = (value) =>
       process.platform === 'win32'
         ? value
@@ -238,42 +234,34 @@ for (const failure of [
             .replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`)
         : value;
     const previousBundlePath = shellPath(previousBundle);
-    const publicBundleFile = path.join(directory, 'public-bundle');
-    await writeFile(publicBundleFile, previousBundlePath);
     if (process.platform === 'win32')
       await writeFile(path.join(bin, 'flock'), '#!/bin/sh\nexit 0\n', {
         mode: 0o755,
       });
     await writeFile(
       path.join(directory, '.env.production'),
-      'PRODUCTION_DOMAIN=fixture.invalid\n',
+      'PRODUCTION_APP_PORT=3002\n',
     );
     await writeFile(
       path.join(bin, 'docker'),
       `#!/bin/sh
 printf '%s|%s\\n' "$APP_IMAGE" "$*" >> "$SIM_LOG"
-selected_bundle=''
-previous_arg=''
-for argument do
-  if [ "$previous_arg" = --project-directory ]; then selected_bundle=$argument; fi
-  previous_arg=$argument
-done
 case "$*" in
+  *'label=com.docker.compose.service=caddy'*)
+    [ "$SIM_FAILURE" != legacy-caddy ] || printf 'fixture-legacy-caddy\\n';;
   *'ps -q app'*) printf 'fixture-container\\n';;
-  *'ps -a -q caddy'*) printf 'fixture-caddy\\n';;
   'inspect --format {{.Config.Image}} fixture-container') printf '%s\\n' "$SIM_PREVIOUS";;
   *'com.docker.compose.project.working_dir'*)
-    case "$*:$SIM_FAILURE" in *'fixture-caddy:bundle-mismatch') printf '/unrecoverable-proxy-bundle\\n';;
+    case "$SIM_FAILURE" in bundle-mismatch) printf '/unrecoverable-app-bundle\\n';;
       *) printf '%s\\n' "$SIM_PREVIOUS_BUNDLE";; esac;;
   *'com.docker.compose.project.config_files'*) printf '%s/compose.production.yaml\\n' "$SIM_PREVIOUS_BUNDLE";;
   *'release-db.mjs backup'*) [ "$SIM_FAILURE" != backup ];;
   *'release-db.mjs migrate'*) [ "$SIM_FAILURE" != migrate ];;
   *'up -d --wait'*)
     printf 'app-ready|%s\\n' "$APP_IMAGE" >> "$SIM_LOG"
-    case "$*" in *'app caddy'*) printf '%s' "$selected_bundle" > "$SIM_PUBLIC_BUNDLE_FILE";; esac
     [ "$SIM_FAILURE" != rollback ] || exit 1
     if [ "$APP_IMAGE" != "$SIM_PREVIOUS" ]; then
-      [ "$SIM_FAILURE" != readiness ] && [ "$SIM_FAILURE" != caddy ] || exit 1
+      [ "$SIM_FAILURE" != readiness ] || exit 1
     fi;;
 esac
 `,
@@ -282,10 +270,9 @@ esac
     await writeFile(
       path.join(bin, 'node'),
       `#!/bin/sh
-active_bundle=$(cat "$SIM_PUBLIC_BUNDLE_FILE")
-printf 'public|%s|%s|%s\\n' "$APP_IMAGE" "$active_bundle" "$*" >> "$SIM_LOG"
+printf 'public|%s|%s\\n' "$APP_IMAGE" "$*" >> "$SIM_LOG"
 if [ "$APP_IMAGE" = "$SIM_PREVIOUS" ]; then
-  [ "$active_bundle" = "$SIM_PREVIOUS_BUNDLE" ] && [ "$SIM_FAILURE" != rollback-public ]
+  [ "$SIM_FAILURE" != rollback-public ]
 else
   case "$SIM_FAILURE" in smoke|public-route|rollback-public) exit 1;; esac
 fi
@@ -307,7 +294,6 @@ fi
           SIM_LOG: path.join(directory, 'calls'),
           SIM_PREVIOUS: previous,
           SIM_PREVIOUS_BUNDLE: previousBundlePath,
-          SIM_PUBLIC_BUNDLE_FILE: publicBundleFile,
           SIM_FAILURE: failure,
         },
         encoding: 'utf8',
@@ -319,11 +305,16 @@ fi
       `Release exit must reflect the requested check result: ${result.stderr}`,
     );
     const calls = await readFile(path.join(directory, 'calls'), 'utf8');
-    if (failure === 'bundle-mismatch') {
+    if (['bundle-mismatch', 'legacy-caddy'].includes(failure)) {
       assert.equal(calls.includes('stop app'), false);
       assert.equal(calls.includes('pull app'), false);
       assert.equal(calls.includes('public|'), false);
-      assert.match(result.stderr, /do not share a recoverable bundle/);
+      assert.match(
+        result.stderr,
+        failure === 'legacy-caddy'
+          ? /Legacy Caddy deployment requires explicit transition/
+          : /bundle is unavailable/,
+      );
       return;
     }
     assert.ok(
@@ -353,7 +344,7 @@ fi
               line.startsWith(`${previous}|compose`) &&
               line.includes('up -d --wait') &&
               line.includes(`--project-directory ${previousBundlePath}`) &&
-              line.endsWith('app caddy'),
+              line.endsWith('app'),
           ),
       );
       if (!['rollback', 'rollback-public'].includes(failure)) {
@@ -371,7 +362,7 @@ fi
           ),
           `${previousBundlePath}\n`,
         );
-        assert.ok(calls.includes(`public|${previous}|${previousBundlePath}|`));
+        assert.ok(calls.includes(`public|${previous}|`));
       }
       assert.match(result.stderr, /database was not reverted/i);
       if (['rollback', 'rollback-public'].includes(failure)) {
@@ -411,12 +402,8 @@ fi
         );
         assert.match(failureRecord, /backup=\/app\/data\/release-backups\//);
       }
-      if (['caddy', 'public-route', 'rollback-public'].includes(failure)) {
+      if (['public-route', 'rollback-public'].includes(failure)) {
         assert.ok(calls.includes(`app-ready|${candidate}`));
-        assert.equal(
-          await readFile(publicBundleFile, 'utf8'),
-          previousBundlePath,
-        );
       }
     }
     if (failure === 'backup') assert.equal(calls.includes('stop app'), false);

@@ -48,7 +48,6 @@ trap 'rm -f "$temporary"' EXIT INT TERM
 {
   printf '%s\n' 'NODE_ENV=production'
   printf '%s\n' 'REPORT_TIME_ZONE=Asia/Shanghai'
-  printf '%s\n' 'SITE_DOMAIN=replace.example.com'
   printf '%s\n' 'ICP_NUMBER='
   printf '%s\n' 'HOST=127.0.0.1'
   printf '%s\n' 'PORT=3002'

@@ -62,7 +62,6 @@ try {
 $settings = @(
   'NODE_ENV=production',
   'REPORT_TIME_ZONE=Asia/Shanghai',
-  'SITE_DOMAIN=replace.example.com',
   'ICP_NUMBER=',
   'HOST=127.0.0.1',
   'PORT=3002',

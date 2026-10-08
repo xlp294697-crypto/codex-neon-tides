@@ -1,9 +1,9 @@
 氿悦体育独立站生产程序——开始部署
 
 1. 先核对压缩包旁的 SHA-256 文件，再解压。
-2. Linux 服务器推荐安装 Docker Compose，使用 compose.yaml 同时启动网站和自动 HTTPS；Windows Server 请按 README 使用原生 Node.js 或 Linux 虚拟机。
+2. Linux 服务器推荐用 Docker Compose 启动网站，并在宿主机安装 Nginx/Certbot 提供 HTTPS；Windows Server 请按 README 使用原生 Node.js 或 Linux 虚拟机。
 3. 运行 tools\Initialize-Config.ps1（Windows）或 tools/initialize-config.sh（Linux），设置 16–250 位且至少包含三类字符的后台密码。
-4. 编辑 .env，把 SITE_DOMAIN=replace.example.com 改成真实域名。
+4. 按 README 在宿主机安装 Nginx 与 Certbot，把示例配置中的 sports.example.com 改为真实域名。
 5. 把域名 DNS 指向服务器，只向公网开放 80/443，不开放 3002。
 6. 在程序目录运行：docker compose up -d --build
 7. 打开：https://你的域名/ 和 https://你的域名/admin

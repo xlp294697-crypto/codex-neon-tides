@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 // Explicit opt-in: this test creates only its uniquely named local Compose
 // project and synthetic volume, then removes those exact resources in cleanup.
 test(
-  'local Compose recovers synthetic imports and every SQLite table through Caddy and authenticated smoke',
+  'local Compose recovers synthetic imports and every SQLite table through the loopback app port and authenticated smoke',
   { skip: !process.env.RECOVERY_IMAGE, timeout: 180000 },
   async (t) => {
     const directory = await mkdtemp(
@@ -75,10 +75,6 @@ test(
       ],
     });
     await writeFile(
-      path.join(directory, 'Caddyfile'),
-      ':8080 {\n reverse_proxy app:3002\n}\n',
-    );
-    await writeFile(
       composeFile,
       JSON.stringify({
         services: {
@@ -96,31 +92,10 @@ test(
               ADMIN_PASSWORD_HASH: passwordHash,
             },
             volumes: ['recovery_data:/app/data'],
+            ports: ['127.0.0.1::3002'],
             read_only: true,
             tmpfs: ['/tmp:size=16m,mode=1777'],
             cap_drop: ['ALL'],
-            security_opt: ['no-new-privileges:true'],
-          },
-          caddy: {
-            image:
-              'caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648',
-            user: '1000:1000',
-            command: [
-              'caddy',
-              'run',
-              '--config',
-              '/etc/caddy/Caddyfile',
-              '--adapter',
-              'caddyfile',
-            ],
-            ports: ['127.0.0.1::8080'],
-            volumes: [
-              `${path.join(directory, 'Caddyfile')}:/etc/caddy/Caddyfile:ro`,
-            ],
-            read_only: true,
-            tmpfs: ['/tmp:size=16m,mode=1777'],
-            cap_drop: ['ALL'],
-            cap_add: ['NET_BIND_SERVICE'],
             security_opt: ['no-new-privileges:true'],
           },
         },
@@ -199,9 +174,9 @@ test(
     const snapshotCode = `import {DatabaseSync} from 'node:sqlite'; import {createHash} from 'node:crypto'; const db=new DatabaseSync('/app/data/site.db'); console.log(JSON.stringify(['inquiries','analytics_events','admin_sessions','schema_migrations','audit_logs'].map(table=>{ const rows=db.prepare('SELECT * FROM '+table+' ORDER BY 1').all(); return {table,count:rows.length,digest:createHash('sha256').update(JSON.stringify(rows)).digest('hex')}; }))); db.close();`;
     stage = 'start';
     await compose(['up', '-d', '--wait', '--wait-timeout', '60']);
-    const binding = await compose(['port', 'caddy', '8080']);
+    const binding = await compose(['port', 'app', '3002']);
     assert.match(binding, /^127\.0\.0\.1:\d+$/);
-    const origin = `http://${binding}`;
+    let origin = `http://${binding}`;
     stage = 'smoke before recovery';
     await command(
       process.execPath,
@@ -268,8 +243,12 @@ test(
       await helper(['node', '--input-type=module', '-e', snapshotCode]),
     );
     assert.deepEqual(recovered, before);
-    stage = 'restart and smoke after recovery';
+    stage = 'restart after recovery';
     await compose(['up', '-d', '--wait', '--wait-timeout', '60', 'app']);
+    const rebound = await compose(['port', 'app', '3002']);
+    assert.match(rebound, /^127\.0\.0\.1:\d+$/);
+    origin = `http://${rebound}`;
+    stage = 'smoke after recovery';
     await command(
       process.execPath,
       [
@@ -299,7 +278,7 @@ test(
       `import {stat,readdir} from 'node:fs/promises'; import {verifyBackup} from './tools/verify-backup.mjs'; const s=await stat('/app/data/site.db'); if((s.mode&511)!==384 || s.uid!==1000) throw new Error('permissions'); const names=(await readdir('/app/data/pre-restore-backups')).filter(n=>n.endsWith('.db')); if(names.length!==1) throw new Error('safety backup'); await verifyBackup('/app/data/pre-restore-backups/'+names[0]);`,
     ]);
     t.diagnostic(
-      `Synthetic Compose recovery passed; image ${imageId}; table counts 2 inquiries, 3 events, 1 session, 1 migration, 3 audits before recovery. Local HTTP proxy only; public TLS is not verified.`,
+      `Synthetic Compose recovery passed; image ${imageId}; table counts 2 inquiries, 3 events, 1 session, 1 migration, 3 audits before recovery. Local loopback HTTP only; host Nginx and public TLS are not verified.`,
     );
   },
 );
