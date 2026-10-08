@@ -33,7 +33,13 @@ function composeList(service, key) {
 
 test('runtime image installs locked production packages and excludes delivery tooling', async () => {
   const dockerfile = await readFile(path.join(root, 'Dockerfile'), 'utf8');
-  assert.match(dockerfile, /FROM node:24-alpine[\d.]*@sha256:[a-f0-9]{64}/);
+  const baseImages = [
+    ...dockerfile.matchAll(
+      /^FROM (node:26-alpine[\d.]+@sha256:[a-f0-9]{64})(?: AS dependencies)?$/gm,
+    ),
+  ];
+  assert.equal(baseImages.length, 2, 'Both stages must pin Node.js 26 Alpine');
+  assert.equal(baseImages[0][1], baseImages[1][1]);
   assert.match(dockerfile, /npm ci --omit=dev/);
   assert.match(dockerfile, /COPY[^\n]*package-lock.json/);
   assert.match(dockerfile, /COPY[^\n]*src \.\/src/);

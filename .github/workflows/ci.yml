@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
@@ -60,7 +60,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
@@ -78,7 +78,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: "24"
+          node-version: "26"
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci --omit=dev --ignore-scripts
@@ -93,6 +93,13 @@ jobs:
         with:
           persist-credentials: false
       - run: docker build -t jiuyue-sports:ci .
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "26"
+      - name: Verify container startup, SQLite backup and recovery
+        run: node --test tests/deployment/recovery-compose.test.mjs
+        env:
+          RECOVERY_IMAGE: jiuyue-sports:ci
       - run: docker save --output "${RUNNER_TEMP}/jiuyue-sports.tar" jiuyue-sports:ci
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

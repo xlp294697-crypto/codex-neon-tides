@@ -21,7 +21,7 @@ docker compose --env-file .env.production -f compose.production.yaml up -d --wai
 
 `STAGING_ENV_FILE` / `PRODUCTION_ENV_FILE` 仅用于显式选择对应服务环境文件，默认分别为 `.env.staging` / `.env.production`；`--env-file` 负责 Compose 变量展开。生产操作仍须经过下述备份与审批流程。`compose.yaml` 和 `compose.app-only.yaml` 是本地/兼容入口，不具备这两套环境隔离约束，同样只绑定回环地址。
 
-镜像固定 Node.js 24 Alpine 基础摘要，用锁文件执行 `npm ci --omit=dev --ignore-scripts`，只复制运行时源码（包括 SQLite SQL 迁移）、生产依赖、公共资源和健康脚本。构建时将 OpenSSL 库升级到至少 3.5.8-r0，最终镜像移除 npm/npx/Yarn；不在运行容器安装依赖。Alpine 修复包来自构建时仓库，因此重建结果需重新扫描并记录最终摘要，不能仅凭基础摘要推定完整镜像相同。应用以 `node` 用户运行，根文件系统只读、删除全部 capabilities、禁止提权，仅数据卷和有大小限制的 `/tmp` 可写。既有卷升级前需核对应用数据对 UID 1000 可写，不能靠放宽整个根文件系统权限解决。宿主机 Nginx 使用 Ubuntu 安全更新，不作为容器镜像拉取。
+镜像固定 Node.js 26 Alpine 基础摘要，用锁文件执行 `npm ci --omit=dev --ignore-scripts`，只复制运行时源码（包括 SQLite SQL 迁移）、生产依赖、公共资源和健康脚本。构建时将 OpenSSL 库升级到至少 3.5.8-r0，最终镜像移除 npm/npx/Yarn；不在运行容器安装依赖。Alpine 修复包来自构建时仓库，因此重建结果需重新扫描并记录最终摘要，不能仅凭基础摘要推定完整镜像相同。应用以 `node` 用户运行，根文件系统只读、删除全部 capabilities、禁止提权，仅数据卷和有大小限制的 `/tmp` 可写。既有卷升级前需核对应用数据对 UID 1000 可写，不能靠放宽整个根文件系统权限解决。宿主机 Nginx 使用 Ubuntu 安全更新，不作为容器镜像拉取。
 
 ### 宿主机 Nginx 与证书初始化
 

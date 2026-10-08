@@ -48,13 +48,13 @@ Playwright 的每个测试通过真实 `createApp` 启动仅监听回环地址�
 
 ## Pull Request 自动检查
 
-`.github/workflows/ci.yml` 在所有 PR、`main` 推送及手动触发时运行，不按路径跳过检查。同一 PR 或分支的新运行取消旧运行。Ubuntu 24.04 作业使用 Node.js 24、锁文件安装和 npm 下载缓存；不缓存 `node_modules`。全部 Action 固定到完整提交 SHA，版本注释用于更新审查。
+`.github/workflows/ci.yml` 在所有 PR、`main` 推送及手动触发时运行，不按路径跳过检查。同一 PR 或分支的新运行取消旧运行。Ubuntu 24.04 作业使用 Node.js 26、锁文件安装和 npm 下载缓存；不缓存 `node_modules`。全部 Action 固定到完整提交 SHA，版本注释用于更新审查。
 
 可在 GitHub 分支保护或 ruleset 中设为必需的检查名称为 `quality (format)`、`quality (lint)`、`quality (syntax)`、`quality (unit)`、`quality (integration)`、`e2e (Chromium desktop and mobile)`、`dependency-audit (production)`、`container-build` 和 `container-scan (Trivy)`。提交工作流并不会自动启用仓库规则；维护者需在 GitHub 启用这些门禁。质量矩阵的一个失败不会取消其他质量检查。质量和依赖审计限时 10 分钟，E2E、构建和镜像扫描各限时 20 分钟。
 
 E2E 安装 Playwright 锁定版本匹配的真实 Chromium 和 Linux 系统依赖，运行现有桌面及 Pixel 7 视口项目；CI 使用两个 worker、禁止 `test.only`、不重试失败。不上传浏览器 HTML 报告、截图或会话诊断。生产依赖使用 `npm ci --omit=dev --ignore-scripts` 后运行 `npm audit --omit=dev --audit-level=high`，任何 HIGH/CRITICAL 报告或审计服务错误均导致失败；该审计不区分是否已有修复。
 
-Docker 作业执行 `docker build -t jiuyue-sports:ci .`，将镜像保存为保留 1 天的当前运行 artifact；扫描作业下载此镜像归档并直接扫描，不重新构建或发布镜像。固定版本 Trivy 检查镜像内 OS 与应用包漏洞，以可修复的 HIGH/CRITICAL 发现使作业失败，SARIF 限定相同严重等级。扫描禁用隐式仓库配置和忽略列表；Trivy 二进制版本需人工随 Action 更新一起评估。SARIF 在发现漏洞时仍上传 GitHub Code Scanning，并作为保留 7 天的 artifact 保存；扫描器在生成报告前出错则作业失败且没有可上传报告。
+Docker 作业执行 `docker build -t jiuyue-sports:ci .`，设置 `RECOVERY_IMAGE=jiuyue-sports:ci` 运行现有 Compose 恢复测试，验证该镜像的启动、SQLite 导入、备份恢复和回环端口冒烟，再将镜像保存为保留 1 天的当前运行 artifact；扫描作业下载此镜像归档并直接扫描，不重新构建或发布镜像。固定版本 Trivy 检查镜像内 OS 与应用包漏洞，以可修复的 HIGH/CRITICAL 发现使作业失败，SARIF 限定相同严重等级。扫描禁用隐式仓库配置和忽略列表；Trivy 二进制版本需人工随 Action 更新一起评估。SARIF 在发现漏洞时仍上传 GitHub Code Scanning，并作为保留 7 天的 artifact 保存；扫描器在生成报告前出错则作业失败且没有可上传报告。
 
 工作流默认只有 `contents: read`；仅扫描作业声明 `security-events: write`，并授予私有仓库 SARIF 上传所需的 `actions: read`，checkout 不保留凭据。没有 `pull_request_target`、部署凭据、镜像仓库写权限或发布步骤。GitHub 可能进一步收紧 fork/Dependabot 的令牌权限；PR 事件遵循 GitHub 对 SARIF 上传的授权规则。仓库必须支持并启用 Code Scanning（私有仓库还需对应功能授权），否则上传失败会显示为检查失败，不静默放行。权限依据见 [GitHub SARIF 上传文档](https://docs.github.com/en/code-security/how-tos/find-and-fix-code-vulnerabilities/integrate-with-existing-tools/upload-sarif-file)。
 
